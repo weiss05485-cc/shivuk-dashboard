@@ -113,13 +113,14 @@ tr:hover td{background:#f7fafd}
 /* ================= CONFIG ================= */
 const APP_PASSWORD = 'shivuk2026';           // סיסמת כניסה — אפשר לשנות
 let GS_URL = '';                              // כתובת ה-Apps Script — מוגדרת במסך הגדרות
-const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון';
+const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים';
+const PAY_METHODS = ['מזומן','העברה בנקאית',"צ'ק",'אחר'];
 const CUSTOMERS_DEFAULT = [];   // הלקוחות נטענים מהנתונים בגיליון
 const TYPES = ['ברכסוני','העברת GB','חזרה','אחר'];
 
 /* ================= STATE ================= */
-const DB = { shipments:[], prices:[] };
-let page = 'home', editId = null, custFilter = '', typeFilter = '';
+const DB = { shipments:[], prices:[], payments:[] };
+let page = 'home', editId = null, editPayId = null, custFilter = '', typeFilter = '';
 
 /* ================= HELPERS ================= */
 const $ = s => document.querySelector(s);
@@ -129,7 +130,8 @@ function fmtN(n){ if(n===''||n==null||isNaN(n)) return '—'; return (+n).toLoca
 function stripApos(v){ return (typeof v==='string' && v.startsWith("'")) ? v.slice(1) : v; }
 function fmtD(d){ d=String(stripApos(d)).slice(0,10); const p=d.split('-'); return p.length===3?`${p[2]}/${p[1]}/${p[0].slice(2)}`:d; }
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); return [...set]; }
+function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); DB.payments.forEach(p=>p.customer&&set.add(p.customer)); return [...set]; }
+function paidOf(c){ return DB.payments.filter(p=>!c||p.customer===c).reduce((a,p)=>a+(+p.amount||0),0); }
 function tagCls(t){ return t==='ברכסוני'?'b':t==='העברת GB'?'g':t==='חזרה'?'r':'o'; }
 
 /* ================= API (Google Apps Script) ================= */
@@ -152,14 +154,17 @@ async function loadAll(){
   if(!gsUrl()){ setSync('nocfg'); if(page==='home') nav('settings'); return; }
   setSync('load');
   try{
-    const [ships, prices] = await Promise.all([
+    const [ships, prices, pays] = await Promise.all([
       apiGet({action:'getTable', sheet:SHEET_SHIP}),
       apiGet({action:'getTable', sheet:SHEET_PRICE}),
+      apiGet({action:'getTable', sheet:SHEET_PAY}),
     ]);
     DB.shipments = (ships.rows||[]).map(r=>({ ...r, date:stripApos(r.date), units:+r.units||0,
       amount:(r.amount===''||r.amount==null)?'':+r.amount }));
     DB.prices = (prices.rows||[]).map(r=>({ ...r, price:(r.price===''||r.price==null)?'':+r.price }));
+    DB.payments = (pays.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
     DB.shipments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
+    DB.payments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     setSync('ok'); render();
   }catch(e){ console.error(e); setSync('err'); toast('שגיאה בטעינה — בדוק את כתובת ה-Apps Script בהגדרות'); }
 }
@@ -185,11 +190,11 @@ function doLogin(){
 function boot(){ $('#login').style.display='none'; renderNav(); render(); loadAll(); }
 
 /* ================= NAV ================= */
-const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
+const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['pay','💰 תשלומים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
 function renderNav(){
   $('#nav').innerHTML = PAGES.map(([id,l])=>`<button class="${page===id?'on':''}" onclick="nav('${id}')">${l}</button>`).join('');
 }
-function nav(p){ page=p; if(p!=='add') editId=null; renderNav(); render(); }
+function nav(p){ page=p; if(p!=='add') editId=null; if(p!=='pay') editPayId=null; renderNav(); render(); }
 
 /* ================= RENDER ================= */
 function render(){
@@ -197,6 +202,7 @@ function render(){
   if(page==='home') m.innerHTML = viewHome();
   else if(page==='add') m.innerHTML = viewAdd();
   else if(page==='list') m.innerHTML = viewList();
+  else if(page==='pay') m.innerHTML = viewPay();
   else if(page==='prices') m.innerHTML = viewPrices();
   else if(page==='settings') m.innerHTML = viewSettings();
   if(page==='home') drawChart();
@@ -220,11 +226,15 @@ function viewHome(){
   const gb  = sums(DB.shipments.filter(s=>s.type==='העברת GB'||s.type==='חזרה'));
   const custRows = customers().map(c=>{
     const rows = DB.shipments.filter(s=>s.customer===c);
-    if(!rows.length) return '';
+    if(!rows.length && !paidOf(c)) return '';
     const t = sums(rows);
+    const bal = t.m - paidOf(c);
     return `<div class="cc"><h3>${esc(c)}</h3><div class="big">${fmtM(t.m)}</div>
-      <div class="note">${fmtN(t.u)} יחידות · ${rows.length} משלוחים</div></div>`;
+      <div class="note">${fmtN(t.u)} יחידות · ${rows.length} משלוחים</div>
+      <div class="note" style="color:${bal>0?'var(--red)':'var(--green)'};font-weight:700">
+        ${bal>0?'חוב פתוח: '+fmtM(bal):'✔ שולם במלואו'}</div></div>`;
   }).join('');
+  const paid = paidOf('');
   const recent = DB.shipments.slice(0,6);
   return `
   <div class="kpis">
@@ -232,6 +242,8 @@ function viewHome(){
     <div class="kpi"><div class="lbl">ברכסוני</div><div class="val">${fmtM(brx.m)}</div></div>
     <div class="kpi"><div class="lbl">העברות GB (נטו)</div><div class="val">${fmtM(gb.m)}</div></div>
     <div class="kpi"><div class="lbl">סה"כ יחידות</div><div class="val">${fmtN(all.u)}</div></div>
+    <div class="kpi"><div class="lbl">שולם</div><div class="val" style="color:var(--green)">${fmtM(paid)}</div></div>
+    <div class="kpi"><div class="lbl">חוב פתוח</div><div class="val" style="color:${all.m-paid>0?'var(--red)':'var(--green)'}">${fmtM(all.m-paid)}</div></div>
   </div>
   <div class="custcards">${custRows}</div>
   <div class="card"><h2>מכירות לפי חודש</h2><canvas id="chart" height="110"></canvas></div>
@@ -357,6 +369,70 @@ async function delShip(id){
   const s=DB.shipments.find(x=>String(x.id)===String(id));
   if(!confirm(`למחוק את המשלוח של ${s.customer} מ-${fmtD(s.date)}?`)) return;
   try{ await deleteRow(SHEET_SHIP,id); toast('נמחק'); await loadAll(); }
+  catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
+}
+
+/* ---------- payments ---------- */
+function viewPay(){
+  const p = editPayId ? DB.payments.find(x=>String(x.id)===String(editPayId)) : null;
+  const today = new Date().toISOString().slice(0,10);
+  const balances = customers().map(c=>{
+    const sales = sums(DB.shipments.filter(s=>s.customer===c)).m;
+    const paid = paidOf(c);
+    return {c, sales, paid, bal: sales-paid};
+  }).filter(b=>b.sales||b.paid);
+  return `
+  <div class="card"><h2>${p?'✏️ עריכת תשלום':'💰 קבלת תשלום'}</h2>
+  <div class="frow">
+    <div><label>תאריך</label><input type="date" id="p-date" value="${p?String(p.date).slice(0,10):today}"></div>
+    <div><label>לקוח</label>
+      <input list="dl-cust2" id="p-cust" value="${esc(p?.customer||'')}" placeholder="בחר לקוח">
+      <datalist id="dl-cust2">${customers().map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
+    <div><label>סכום (₪)</label><input type="number" id="p-amount" value="${p?.amount??''}"></div>
+    <div><label>אופן תשלום</label><select id="p-method">
+      ${PAY_METHODS.map(m=>`<option ${p?.method===m?'selected':''}>${m}</option>`).join('')}</select></div>
+  </div>
+  <div class="frow"><div style="grid-column:1/-1"><label>הערות</label><input id="p-notes" value="${esc(p?.notes||'')}"></div></div>
+  <button class="btn" onclick="submitPayment()">${p?'💾 שמור שינויים':'💾 שמור תשלום'}</button>
+  ${p?`<button class="btn sec" style="margin-inline-start:8px" onclick="editPayId=null;render()">ביטול</button>`:''}
+  </div>
+
+  <div class="card"><h2>💳 מצב חובות לפי לקוח</h2>
+  <div class="twrap"><table><tr><th>לקוח</th><th>סה"כ מכירות</th><th>שולם</th><th>חוב פתוח</th></tr>
+  ${balances.map(b=>`<tr><td><b>${esc(b.c)}</b></td><td class="money">${fmtM(b.sales)}</td>
+    <td class="money">${fmtM(b.paid)}</td>
+    <td class="money ${b.bal>0?'neg':''}" style="font-size:15px">${fmtM(b.bal)}</td></tr>`).join('')}
+  <tr><td style="font-weight:900">סה"כ</td>
+    <td class="money">${fmtM(balances.reduce((a,b)=>a+b.sales,0))}</td>
+    <td class="money">${fmtM(balances.reduce((a,b)=>a+b.paid,0))}</td>
+    <td class="money neg" style="font-size:15px">${fmtM(balances.reduce((a,b)=>a+b.bal,0))}</td></tr>
+  </table></div></div>
+
+  <div class="card"><h2>📜 היסטוריית תשלומים (${DB.payments.length})</h2>
+  <div class="twrap"><table><tr><th>תאריך</th><th>לקוח</th><th>סכום</th><th>אופן</th><th>הערות</th><th></th></tr>
+  ${DB.payments.map(x=>`<tr><td>${fmtD(x.date)}</td><td>${esc(x.customer)}</td>
+    <td class="money">${fmtM(x.amount)}</td><td>${esc(x.method||'')}</td>
+    <td style="white-space:normal;max-width:220px">${esc(x.notes||'')}</td>
+    <td><button class="rowbtn" onclick="editPay('${x.id}')">✏️</button><button class="rowbtn" onclick="delPay('${x.id}')">🗑️</button></td></tr>`).join('')
+    || '<tr><td colspan="6" class="empty">עדיין לא נרשמו תשלומים</td></tr>'}
+  </table></div></div>`;
+}
+async function submitPayment(){
+  const date=$('#p-date').value, customer=$('#p-cust').value.trim(), amount=$('#p-amount').value;
+  if(!date||!customer||amount===''){ toast('חסר תאריך / לקוח / סכום'); return; }
+  const rec = { id: editPayId || Date.now(), date:"'"+date, customer, amount:+amount,
+    method:$('#p-method').value, notes:$('#p-notes').value.trim() };
+  try{
+    await saveRow(SHEET_PAY, rec);
+    toast(editPayId?'התשלום עודכן ✔':'התשלום נשמר ✔'); editPayId=null;
+    await loadAll(); nav('pay');
+  }catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
+}
+function editPay(id){ editPayId=id; render(); window.scrollTo({top:0,behavior:'smooth'}); }
+async function delPay(id){
+  const x=DB.payments.find(p=>String(p.id)===String(id));
+  if(!confirm(`למחוק תשלום של ${fmtM(x.amount)} מ-${esc(x.customer)}?`)) return;
+  try{ await deleteRow(SHEET_PAY,id); toast('נמחק'); await loadAll(); }
   catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
 }
 
