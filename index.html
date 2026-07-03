@@ -492,6 +492,11 @@ async function saveSettings(){
 }
 
 /* ================= INIT ================= */
+// הגדרה בלחיצה אחת: קישור עם ‎#gs=<כתובת>‎ שומר את כתובת השרת במכשיר ומנקה את הקישור
+(function(){
+  const m = location.hash.match(/[#&]gs=([^&]+)/);
+  if(m){ localStorage.setItem('shivuk_gs', decodeURIComponent(m[1])); history.replaceState(null,'',location.pathname); }
+})();
 if(localStorage.getItem('shivuk_auth')==='1') boot();
 </script>
 </body>
