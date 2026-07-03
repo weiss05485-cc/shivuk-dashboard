@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>שיווק — ניהול משלוחים</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --blue:#1f4e78; --blue2:#2e6da4; --bg:#f4f6fa; --card:#fff; --line:#e3e8f0;
+  --green:#1e7e34; --red:#c00000; --gold:#b8860b; --text:#1a2233; --muted:#7a8699;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Heebo',Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+button{font-family:inherit;cursor:pointer}
+input,select,textarea{font-family:inherit;font-size:15px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;width:100%;background:#fff}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--blue2);border-color:transparent}
+label{font-size:13px;font-weight:500;color:var(--muted);display:block;margin-bottom:4px}
+
+/* ---------- login ---------- */
+#login{position:fixed;inset:0;background:linear-gradient(135deg,#1f4e78,#153450);display:flex;align-items:center;justify-content:center;z-index:100}
+#login .box{background:#fff;border-radius:18px;padding:36px 32px;width:min(360px,92vw);text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+#login h1{font-size:26px;color:var(--blue);margin-bottom:4px}
+#login p{color:var(--muted);font-size:14px;margin-bottom:20px}
+#login input{text-align:center;font-size:18px;margin-bottom:12px}
+#login button{width:100%;background:var(--blue);color:#fff;border:0;border-radius:9px;padding:12px;font-size:16px;font-weight:700}
+#login .err{color:var(--red);font-size:13px;margin-top:8px;min-height:18px}
+
+/* ---------- topbar & nav ---------- */
+header{background:var(--blue);color:#fff;padding:14px 16px 0;position:sticky;top:0;z-index:20;box-shadow:0 2px 10px rgba(0,0,0,.15)}
+.hrow{display:flex;align-items:center;justify-content:space-between;max-width:1100px;margin:0 auto}
+header h1{font-size:20px;font-weight:900}
+header .sub{font-size:11px;opacity:.75}
+#syncState{font-size:12px;opacity:.85;display:flex;align-items:center;gap:6px}
+nav{display:flex;gap:4px;max-width:1100px;margin:10px auto 0;overflow-x:auto}
+nav button{background:transparent;border:0;color:#cfe0f2;padding:10px 16px;font-size:14px;font-weight:500;border-radius:10px 10px 0 0;white-space:nowrap}
+nav button.on{background:var(--bg);color:var(--blue);font-weight:700}
+main{max-width:1100px;margin:0 auto;padding:18px 14px 60px}
+
+/* ---------- cards ---------- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.kpi{background:var(--card);border-radius:14px;padding:16px;border:1px solid var(--line);box-shadow:0 2px 8px rgba(31,78,120,.06)}
+.kpi .lbl{font-size:12px;color:var(--muted);font-weight:500}
+.kpi .val{font-size:24px;font-weight:900;color:var(--blue);margin-top:4px}
+.kpi.warn .val{color:var(--red);font-size:18px}
+.card{background:var(--card);border-radius:14px;padding:18px;border:1px solid var(--line);box-shadow:0 2px 8px rgba(31,78,120,.06);margin-bottom:16px}
+.card h2{font-size:16px;color:var(--blue);margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+
+/* ---------- table ---------- */
+.twrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{background:#eef3f9;color:var(--blue);font-weight:700;padding:9px 10px;text-align:right;white-space:nowrap}
+td{padding:9px 10px;border-top:1px solid var(--line);white-space:nowrap}
+tr:hover td{background:#f7fafd}
+.money{font-weight:700;color:var(--green)}
+.money.neg{color:var(--red)}
+.tag{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:700}
+.tag.b{background:#ddebf7;color:var(--blue)}
+.tag.g{background:#e2efda;color:var(--green)}
+.tag.r{background:#fde7e7;color:var(--red)}
+.tag.o{background:#fff2cc;color:var(--gold)}
+.rowbtn{border:0;background:#eef3f9;border-radius:8px;padding:5px 9px;font-size:13px;margin-inline-start:4px}
+.rowbtn:hover{background:#ddebf7}
+
+/* ---------- form ---------- */
+.frow{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:12px}
+.btn{background:var(--blue);color:#fff;border:0;border-radius:10px;padding:12px 26px;font-size:15px;font-weight:700}
+.btn:hover{background:var(--blue2)}
+.btn.sec{background:#eef3f9;color:var(--blue)}
+.btn.danger{background:#fde7e7;color:var(--red)}
+.gbcalc{background:#f7fafd;border:1px dashed var(--blue2);border-radius:12px;padding:14px;margin-bottom:12px}
+.gbline{display:grid;grid-template-columns:1fr 90px 110px;gap:8px;margin-bottom:8px;align-items:center}
+.gbline .sum{font-weight:700;text-align:center;color:var(--green)}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.chip{border:1px solid var(--line);background:#fff;border-radius:20px;padding:6px 14px;font-size:13px}
+.chip.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+.note{font-size:12px;color:var(--muted)}
+.empty{text-align:center;padding:40px;color:var(--muted)}
+#toast{position:fixed;bottom:24px;right:50%;transform:translateX(50%);background:var(--text);color:#fff;padding:12px 22px;border-radius:12px;font-size:14px;display:none;z-index:50;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.custcards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:18px}
+.cc{background:var(--card);border-radius:14px;border:1px solid var(--line);padding:16px;border-top:4px solid var(--blue2)}
+.cc h3{font-size:15px;color:var(--blue)}
+.cc .big{font-size:21px;font-weight:900;margin:6px 0 2px}
+.cc .note{font-size:12.5px}
+@media(max-width:600px){ header h1{font-size:17px} .kpi .val{font-size:19px} td,th{padding:7px 7px;font-size:13px} }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="box">
+    <h1>📦 שיווק</h1>
+    <p>ניהול משלוחים ומכירות סיטונאיות</p>
+    <input type="password" id="pw" placeholder="סיסמה" onkeydown="if(event.key==='Enter')doLogin()">
+    <button onclick="doLogin()">כניסה</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<header>
+  <div class="hrow">
+    <div><h1>📦 שיווק — ניהול משלוחים</h1><div class="sub">ברודוויי · גוטסמן אשדוד · גוטסמן ערד</div></div>
+    <div id="syncState"></div>
+  </div>
+  <nav id="nav"></nav>
+</header>
+<main id="main"></main>
+<div id="toast"></div>
+
+<script>
+/* ================= CONFIG ================= */
+const APP_PASSWORD = 'shivuk2026';           // סיסמת כניסה — אפשר לשנות
+let GS_URL = '';                              // כתובת ה-Apps Script — מוגדרת במסך הגדרות
+const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון';
+const CUSTOMERS_DEFAULT = ['ברודוויי','גוטסמן אשדוד','גוטסמן ערד'];
+const TYPES = ['ברכסוני','העברת GB','חזרה','אחר'];
+
+/* ================= STATE ================= */
+const DB = { shipments:[], prices:[] };
+let page = 'home', editId = null, custFilter = '', typeFilter = '';
+
+/* ================= HELPERS ================= */
+const $ = s => document.querySelector(s);
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',2600); }
+function fmtM(n){ if(n===''||n==null||isNaN(n)) return '—'; return Math.round(+n).toLocaleString('he-IL')+' ₪'; }
+function fmtN(n){ if(n===''||n==null||isNaN(n)) return '—'; return (+n).toLocaleString('he-IL'); }
+function stripApos(v){ return (typeof v==='string' && v.startsWith("'")) ? v.slice(1) : v; }
+function fmtD(d){ d=String(stripApos(d)).slice(0,10); const p=d.split('-'); return p.length===3?`${p[2]}/${p[1]}/${p[0].slice(2)}`:d; }
+function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); return [...set]; }
+function tagCls(t){ return t==='ברכסוני'?'b':t==='העברת GB'?'g':t==='חזרה'?'r':'o'; }
+
+/* ================= API (Google Apps Script) ================= */
+function gsUrl(){ return localStorage.getItem('shivuk_gs') || GS_URL; }
+async function apiGet(params){
+  const r = await fetch(gsUrl()+'?'+new URLSearchParams(params), {method:'GET'});
+  return r.json();
+}
+async function apiPost(params){
+  const r = await fetch(gsUrl(), {method:'POST', body:new URLSearchParams(params)});
+  return r.json();
+}
+function setSync(state){
+  $('#syncState').innerHTML = state==='ok' ? '🟢 מסונכרן'
+    : state==='load' ? '⏳ טוען…' : state==='save' ? '⏳ שומר…'
+    : state==='nocfg' ? '⚙️ נדרשת הגדרה' : '🔴 שגיאה';
+}
+
+async function loadAll(){
+  if(!gsUrl()){ setSync('nocfg'); if(page==='home') nav('settings'); return; }
+  setSync('load');
+  try{
+    const [ships, prices] = await Promise.all([
+      apiGet({action:'getTable', sheet:SHEET_SHIP}),
+      apiGet({action:'getTable', sheet:SHEET_PRICE}),
+    ]);
+    DB.shipments = (ships.rows||[]).map(r=>({ ...r, date:stripApos(r.date), units:+r.units||0,
+      amount:(r.amount===''||r.amount==null)?'':+r.amount }));
+    DB.prices = (prices.rows||[]).map(r=>({ ...r, price:(r.price===''||r.price==null)?'':+r.price }));
+    DB.shipments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
+    setSync('ok'); render();
+  }catch(e){ console.error(e); setSync('err'); toast('שגיאה בטעינה — בדוק את כתובת ה-Apps Script בהגדרות'); }
+}
+
+async function saveRow(sheet, data){
+  setSync('save');
+  const res = await apiPost({action:'saveRow', sheet, data:JSON.stringify(data)});
+  setSync('ok');
+  return res;
+}
+async function deleteRow(sheet, id){
+  setSync('save');
+  const res = await apiPost({action:'deleteRow', sheet, id});
+  setSync('ok');
+  return res;
+}
+
+/* ================= LOGIN ================= */
+function doLogin(){
+  if($('#pw').value===APP_PASSWORD){ localStorage.setItem('shivuk_auth','1'); boot(); }
+  else $('#loginErr').textContent='סיסמה שגויה';
+}
+function boot(){ $('#login').style.display='none'; renderNav(); render(); loadAll(); }
+
+/* ================= NAV ================= */
+const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
+function renderNav(){
+  $('#nav').innerHTML = PAGES.map(([id,l])=>`<button class="${page===id?'on':''}" onclick="nav('${id}')">${l}</button>`).join('');
+}
+function nav(p){ page=p; if(p!=='add') editId=null; renderNav(); render(); }
+
+/* ================= RENDER ================= */
+function render(){
+  const m = $('#main');
+  if(page==='home') m.innerHTML = viewHome();
+  else if(page==='add') m.innerHTML = viewAdd();
+  else if(page==='list') m.innerHTML = viewList();
+  else if(page==='prices') m.innerHTML = viewPrices();
+  else if(page==='settings') m.innerHTML = viewSettings();
+  if(page==='home') drawChart();
+  if(page==='add') gbCalcInit();
+}
+
+/* ---------- home ---------- */
+function sums(rows){
+  let u=0,m=0; rows.forEach(s=>{ u+=s.units||0; if(s.amount!=='') m+=s.amount||0; });
+  return {u,m};
+}
+function viewHome(){
+  if(!DB.shipments.length){
+    return `<div class="card"><div class="empty">
+      אין עדיין נתונים.<br><br>
+      ${gsUrl() ? `<button class="btn" onclick="nav('add')">➕ הוספת משלוח ראשון</button>` : `<button class="btn" onclick="nav('settings')">⚙️ להגדרת החיבור לגוגל</button>`}
+    </div></div>`;
+  }
+  const all = sums(DB.shipments);
+  const brx = sums(DB.shipments.filter(s=>s.type==='ברכסוני'));
+  const gb  = sums(DB.shipments.filter(s=>s.type==='העברת GB'||s.type==='חזרה'));
+  const custRows = customers().map(c=>{
+    const rows = DB.shipments.filter(s=>s.customer===c);
+    if(!rows.length) return '';
+    const t = sums(rows);
+    return `<div class="cc"><h3>${esc(c)}</h3><div class="big">${fmtM(t.m)}</div>
+      <div class="note">${fmtN(t.u)} יחידות · ${rows.length} משלוחים</div></div>`;
+  }).join('');
+  const recent = DB.shipments.slice(0,6);
+  return `
+  <div class="kpis">
+    <div class="kpi"><div class="lbl">סה"כ מכירות</div><div class="val">${fmtM(all.m)}</div></div>
+    <div class="kpi"><div class="lbl">ברכסוני</div><div class="val">${fmtM(brx.m)}</div></div>
+    <div class="kpi"><div class="lbl">העברות GB (נטו)</div><div class="val">${fmtM(gb.m)}</div></div>
+    <div class="kpi"><div class="lbl">סה"כ יחידות</div><div class="val">${fmtN(all.u)}</div></div>
+  </div>
+  <div class="custcards">${custRows}</div>
+  <div class="card"><h2>מכירות לפי חודש</h2><canvas id="chart" height="110"></canvas></div>
+  <div class="card"><h2>משלוחים אחרונים <button class="btn sec" onclick="nav('list')">הכל ←</button></h2>
+    <div class="twrap"><table><tr><th>תאריך</th><th>לקוח</th><th>סוג</th><th>יח'</th><th>סכום</th></tr>
+    ${recent.map(s=>`<tr><td>${fmtD(s.date)}</td><td>${esc(s.customer)}</td>
+      <td><span class="tag ${tagCls(s.type)}">${esc(s.type)}</span></td>
+      <td>${fmtN(s.units)}</td><td class="money ${s.amount<0?'neg':''}">${fmtM(s.amount)}</td></tr>`).join('')}
+    </table></div></div>`;
+}
+let chartObj=null;
+function drawChart(){
+  if(typeof Chart==='undefined' || !$('#chart')) return;
+  const byMonth={};
+  DB.shipments.forEach(s=>{
+    const m=String(s.date).slice(0,7); if(!m) return;
+    byMonth[m]=byMonth[m]||{b:0,g:0};
+    const v=(s.amount===''?0:+s.amount);
+    if(s.type==='ברכסוני') byMonth[m].b+=v; else byMonth[m].g+=v;
+  });
+  const keys=Object.keys(byMonth).sort();
+  const lbl=keys.map(k=>{const[y,mo]=k.split('-');return mo+'/'+y.slice(2);});
+  if(chartObj) chartObj.destroy();
+  chartObj=new Chart($('#chart'),{type:'bar',
+    data:{labels:lbl,datasets:[
+      {label:'ברכסוני',data:keys.map(k=>byMonth[k].b),backgroundColor:'#2e6da4'},
+      {label:'העברות GB',data:keys.map(k=>byMonth[k].g),backgroundColor:'#70ad47'}]},
+    options:{plugins:{legend:{position:'bottom'}},scales:{x:{stacked:true},y:{stacked:true}},responsive:true}});
+}
+
+/* ---------- add / edit ---------- */
+function viewAdd(){
+  const s = editId ? DB.shipments.find(x=>String(x.id)===String(editId)) : null;
+  const today = new Date().toISOString().slice(0,10);
+  return `<div class="card"><h2>${s?'✏️ עריכת משלוח':'➕ משלוח חדש'}</h2>
+  <div class="frow">
+    <div><label>תאריך</label><input type="date" id="f-date" value="${s?String(s.date).slice(0,10):today}"></div>
+    <div><label>לקוח</label>
+      <input list="dl-cust" id="f-cust" value="${esc(s?.customer||'')}" placeholder="בחר או הקלד לקוח חדש">
+      <datalist id="dl-cust">${customers().map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
+    <div><label>סוג</label><select id="f-type" onchange="gbCalcToggle()">
+      ${TYPES.map(t=>`<option ${s?.type===t?'selected':''}>${t}</option>`).join('')}</select></div>
+  </div>
+  <div id="gbcalc-wrap"></div>
+  <div class="frow">
+    <div><label>כמות (יח') — בחזרה להזין מינוס</label><input type="number" id="f-units" value="${s?.units??''}"></div>
+    <div><label>סכום (₪)</label><input type="number" id="f-amount" value="${s?.amount??''}"></div>
+    <div><label>מס' תעודה (לא חובה)</label><input id="f-doc" value="${esc(s?.doc||'')}"></div>
+  </div>
+  <div class="frow"><div style="grid-column:1/-1"><label>הערות</label><input id="f-notes" value="${esc(s?.notes||'')}"></div></div>
+  <button class="btn" onclick="submitShipment()">${s?'💾 שמור שינויים':'💾 שמור משלוח'}</button>
+  ${s?`<button class="btn sec" style="margin-inline-start:8px" onclick="editId=null;nav('list')">ביטול</button>`:''}
+  </div>`;
+}
+function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return; w.innerHTML = ($('#f-type').value==='העברת GB') ? gbCalcHtml() : ''; }
+function gbCalcInit(){ gbCalcToggle(); }
+function gbCalcHtml(){
+  const priced = DB.prices.filter(p=>p.price!=='');
+  if(!priced.length) return '';
+  return `<div class="gbcalc"><b style="font-size:14px">🧮 מחשבון GB — הזן כמויות והסכום יחושב לבד</b><br><br>
+    ${priced.map((p,i)=>`<div class="gbline">
+      <span style="font-size:14px">${esc(p.product)} <span class="note">(${fmtM(p.price)})</span></span>
+      <input type="number" min="0" id="gbq-${i}" oninput="gbCalc()" placeholder="0">
+      <span class="sum" id="gbs-${i}"></span></div>`).join('')}
+    <div style="text-align:left;font-weight:900;color:var(--blue)" id="gb-total"></div></div>`;
+}
+function gbCalc(){
+  const priced = DB.prices.filter(p=>p.price!=='');
+  let total=0, units=0;
+  priced.forEach((p,i)=>{
+    const q=+($('#gbq-'+i)?.value||0);
+    const s=q*p.price; total+=s; units+=q;
+    const el=$('#gbs-'+i); if(el) el.textContent = q? fmtM(s):'';
+  });
+  $('#gb-total').textContent = units? `סה"כ: ${fmtN(units)} יח' · ${fmtM(total)}` : '';
+  if(units){ $('#f-units').value=units; $('#f-amount').value=total; }
+}
+async function submitShipment(){
+  const date=$('#f-date').value, customer=$('#f-cust').value.trim(), type=$('#f-type').value;
+  const units=$('#f-units').value, amount=$('#f-amount').value;
+  if(!date||!customer){ toast('חסר תאריך או לקוח'); return; }
+  if(units===''){ toast('חסרה כמות'); return; }
+  const rec = { id: editId || Date.now(), date:"'"+date, customer, type,
+    units:+units, amount:amount===''?'':+amount, doc:$('#f-doc').value.trim(), notes:$('#f-notes').value.trim() };
+  try{
+    await saveRow(SHEET_SHIP, rec);
+    toast(editId?'המשלוח עודכן ✔':'המשלוח נשמר ✔'); editId=null;
+    await loadAll(); nav('home');
+  }catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
+}
+
+/* ---------- list ---------- */
+function viewList(){
+  let rows = DB.shipments;
+  if(custFilter) rows = rows.filter(s=>s.customer===custFilter);
+  if(typeFilter) rows = rows.filter(s=>s.type===typeFilter);
+  const t = sums(rows);
+  return `<div class="card"><h2>📋 כל המשלוחים (${rows.length})</h2>
+  <div class="filters">
+    <button class="chip ${!custFilter?'on':''}" onclick="custFilter='';render()">כל הלקוחות</button>
+    ${customers().map(c=>`<button class="chip ${custFilter===c?'on':''}" onclick="custFilter='${esc(c)}';render()">${esc(c)}</button>`).join('')}
+  </div>
+  <div class="filters">
+    <button class="chip ${!typeFilter?'on':''}" onclick="typeFilter='';render()">כל הסוגים</button>
+    ${TYPES.map(tp=>`<button class="chip ${typeFilter===tp?'on':''}" onclick="typeFilter='${tp}';render()">${tp}</button>`).join('')}
+  </div>
+  <div class="twrap"><table>
+    <tr><th>תאריך</th><th>לקוח</th><th>סוג</th><th>יח'</th><th>סכום</th><th>תעודה</th><th>הערות</th><th></th></tr>
+    ${rows.map(s=>`<tr>
+      <td>${fmtD(s.date)}</td><td>${esc(s.customer)}</td>
+      <td><span class="tag ${tagCls(s.type)}">${esc(s.type)}</span></td>
+      <td>${fmtN(s.units)}</td>
+      <td class="money ${s.amount<0?'neg':''}">${fmtM(s.amount)}</td>
+      <td>${esc(s.doc||'')}</td><td style="white-space:normal;max-width:220px">${esc(s.notes||'')}</td>
+      <td><button class="rowbtn" onclick="editShip('${s.id}')">✏️</button><button class="rowbtn" onclick="delShip('${s.id}')">🗑️</button></td>
+    </tr>`).join('') || '<tr><td colspan="8" class="empty">אין משלוחים</td></tr>'}
+    <tr><td style="font-weight:900">סה"כ</td><td></td><td></td>
+      <td style="font-weight:900">${fmtN(t.u)}</td><td class="money">${fmtM(t.m)}</td><td></td><td></td><td></td></tr>
+  </table></div></div>`;
+}
+function editShip(id){ editId=id; nav('add'); }
+async function delShip(id){
+  const s=DB.shipments.find(x=>String(x.id)===String(id));
+  if(!confirm(`למחוק את המשלוח של ${s.customer} מ-${fmtD(s.date)}?`)) return;
+  try{ await deleteRow(SHEET_SHIP,id); toast('נמחק'); await loadAll(); }
+  catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
+}
+
+/* ---------- prices ---------- */
+function viewPrices(){
+  return `<div class="card"><h2>🏷️ מחירון GB</h2>
+  <div class="twrap"><table><tr><th>מוצר</th><th>מחיר (₪)</th><th></th></tr>
+  ${DB.prices.map(p=>`<tr><td style="white-space:normal">${esc(p.product)}</td>
+    <td>${p.price===''?'<span class="tag r">אין מחיר</span>':`<b>${fmtM(p.price)}</b>`}</td>
+    <td><button class="rowbtn" onclick="editPrice('${p.id}')">✏️</button><button class="rowbtn" onclick="delPrice('${p.id}')">🗑️</button></td></tr>`).join('')
+    || '<tr><td colspan="3" class="empty">אין מוצרים במחירון</td></tr>'}
+  </table></div><br>
+  <div class="frow">
+    <div><label>מוצר חדש</label><input id="np-name"></div>
+    <div><label>מחיר (₪)</label><input type="number" id="np-price"></div>
+    <div style="display:flex;align-items:flex-end"><button class="btn" onclick="addPrice()">➕ הוסף</button></div>
+  </div>
+  <p class="note">המחירון משמש את "מחשבון GB" בטופס משלוח חדש.</p></div>`;
+}
+async function addPrice(){
+  const name=$('#np-name').value.trim(); if(!name){toast('חסר שם מוצר');return;}
+  const price=$('#np-price').value;
+  await saveRow(SHEET_PRICE,{id:Date.now(),product:name,price:price===''?'':+price});
+  toast('נוסף ✔'); await loadAll();
+}
+async function editPrice(id){
+  const p=DB.prices.find(x=>String(x.id)===String(id));
+  const np=prompt(`מחיר עבור: ${p.product}`, p.price);
+  if(np===null) return;
+  await saveRow(SHEET_PRICE,{...p, price:np===''?'':+np});
+  toast('עודכן ✔'); await loadAll();
+}
+async function delPrice(id){
+  const p=DB.prices.find(x=>String(x.id)===String(id));
+  if(!confirm(`למחוק את "${p.product}" מהמחירון?`)) return;
+  await deleteRow(SHEET_PRICE,id); toast('נמחק'); await loadAll();
+}
+
+/* ---------- settings ---------- */
+function viewSettings(){
+  return `<div class="card"><h2>⚙️ הגדרות</h2>
+  <label>כתובת ה-Apps Script (מסתיימת ב-/exec)</label>
+  <input id="set-gs" value="${esc(gsUrl())}" placeholder="https://script.google.com/macros/s/..../exec" style="direction:ltr;text-align:left">
+  <br><br><button class="btn" onclick="saveSettings()">💾 שמור ובדוק חיבור</button>
+  <button class="btn sec" style="margin-inline-start:8px" onclick="localStorage.removeItem('shivuk_auth');location.reload()">🚪 יציאה</button>
+  <br><br><p class="note">ההגדרה נשמרת במכשיר הזה. יש להזין אותה פעם אחת בכל מכשיר (טלפון/מחשב).</p></div>`;
+}
+async function saveSettings(){
+  const u=$('#set-gs').value.trim();
+  if(!u){ toast('נא להדביק כתובת'); return; }
+  localStorage.setItem('shivuk_gs',u);
+  try{
+    const r=await apiGet({action:'ping'});
+    if(r.ok){ toast('מחובר בהצלחה ✔'); await loadAll(); nav('home'); }
+    else throw 0;
+  }catch(e){ toast('לא הצלחתי להתחבר — בדוק את הכתובת'); setSync('err'); }
+}
+
+/* ================= INIT ================= */
+if(localStorage.getItem('shivuk_auth')==='1') boot();
+</script>
+</body>
+</html>
