@@ -112,6 +112,8 @@ tr:hover td{background:#f7fafd}
 <script>
 /* ================= CONFIG ================= */
 const APP_PW_HASH = '7336d9ead196fe8ac03a3c003144eea8d119040dca54285735074793d4067af9'; // sha256('shivuk|<סיסמה>') — הסיסמה עצמה לא בקוד
+// כתובת ה-Apps Script מוצפנת עם הסיסמה — נפתחת אוטומטית בכניסה, בלי הגדרה ידנית בכל מכשיר
+const GS_ENC = 'aa4f5102ed5d188f6541cf4e2c81eecb883d877d8829811cdbb802935ef4f0943bff0d010f46f7fe8e555018e64f528f9b365b2b42fe2f6c4a2f2b1eff957f0c4e53ef294b2485670e4195564eba309621b78c1f1d32c3bc2b9bd64836445dc2c8a415e42a0f3ed383c8fbc37017c3254e31';
 let GS_URL = '';                              // כתובת ה-Apps Script — מוגדרת במסך הגדרות
 const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים';
 const PAY_METHODS = ['מזומן','העברה בנקאית',"צ'ק",'אחר'];
@@ -224,9 +226,24 @@ async function sha256hex(s){
   }
   return sha256bytes(bytes);
 }
+async function decryptGs(pw){ // פענוח כתובת השרת מהבלוב המוצפן, בעזרת הסיסמה
+  const enc = GS_ENC.match(/../g).map(h=>parseInt(h,16));
+  const out = new Uint8Array(enc.length);
+  for(let i=0; i<enc.length; i+=32){
+    const ks = (await sha256hex('shivukenc|'+pw+'|'+(i/32))).match(/../g).map(h=>parseInt(h,16));
+    for(let j=0; j<32 && i+j<enc.length; j++) out[i+j] = enc[i+j] ^ ks[j];
+  }
+  const url = new TextDecoder().decode(out);
+  return url.startsWith('https://') ? url : null;
+}
 async function doLogin(){
-  const h = await sha256hex('shivuk|'+$('#pw').value);
-  if(h===APP_PW_HASH){ localStorage.setItem('shivuk_auth','1'); boot(); }
+  const pw = $('#pw').value;
+  const h = await sha256hex('shivuk|'+pw);
+  if(h===APP_PW_HASH){
+    const url = await decryptGs(pw);
+    if(url) localStorage.setItem('shivuk_gs', url);
+    localStorage.setItem('shivuk_auth','1'); boot();
+  }
   else $('#loginErr').textContent='סיסמה שגויה';
 }
 function boot(){ $('#login').style.display='none'; renderNav(); render(); loadAll(); }
