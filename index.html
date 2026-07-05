@@ -129,6 +129,22 @@ let _gbItems = null; // שורות המוצרים מהמחשבון (נשמרות
 /* ================= HELPERS ================= */
 const $ = s => document.querySelector(s);
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',2600); }
+function uiConfirm(msg, okLabel){ // דיאלוג מעוצב במקום confirm של הדפדפן
+  return new Promise(res=>{
+    const ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:90;display:flex;align-items:center;justify-content:center';
+    ov.innerHTML=`<div style="background:#fff;border-radius:16px;padding:24px;width:min(340px,90vw);text-align:center;box-shadow:0 18px 50px rgba(0,0,0,.3)">
+      <div style="font-size:15px;margin-bottom:18px;line-height:1.5">${msg}</div>
+      <button class="btn danger" data-x="1">${okLabel||'מחק'}</button>
+      <button class="btn sec" style="margin-inline-start:8px">ביטול</button></div>`;
+    document.body.appendChild(ov);
+    const done=v=>{ov.remove();res(v);};
+    ov.querySelector('[data-x]').onclick=()=>done(true);
+    ov.querySelector('.btn.sec').onclick=()=>done(false);
+    ov.onclick=e=>{ if(e.target===ov) done(false); };
+    document.addEventListener('keydown',function esc(e){ if(e.key==='Escape'){document.removeEventListener('keydown',esc);done(false);} });
+  });
+}
 function fmtM(n){ if(n===''||n==null||isNaN(n)) return '—'; return Math.round(+n).toLocaleString('he-IL')+' ₪'; }
 function fmtN(n){ if(n===''||n==null||isNaN(n)) return '—'; return (+n).toLocaleString('he-IL'); }
 function stripApos(v){ return (typeof v==='string' && v.startsWith("'")) ? v.slice(1) : v; }
@@ -456,7 +472,7 @@ function viewList(){
 function editShip(id){ editId=id; nav('add'); }
 async function delShip(id){
   const s=DB.shipments.find(x=>String(x.id)===String(id));
-  if(!confirm(`למחוק את המשלוח של ${s.customer} מ-${fmtD(s.date)}?`)) return;
+  if(!await uiConfirm(`למחוק את המשלוח של <b>${esc(s.customer)}</b> מ-${fmtD(s.date)}?`)) return;
   try{ await deleteRow(SHEET_SHIP,id); toast('נמחק'); await loadAll(); }
   catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
 }
@@ -520,7 +536,7 @@ async function submitPayment(){
 function editPay(id){ editPayId=id; render(); window.scrollTo({top:0,behavior:'smooth'}); }
 async function delPay(id){
   const x=DB.payments.find(p=>String(p.id)===String(id));
-  if(!confirm(`למחוק תשלום של ${fmtM(x.amount)} מ-${esc(x.customer)}?`)) return;
+  if(!await uiConfirm(`למחוק תשלום של <b>${fmtM(x.amount)}</b> מ-${esc(x.customer)}?`)) return;
   try{ await deleteRow(SHEET_PAY,id); toast('נמחק'); await loadAll(); }
   catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
 }
@@ -561,7 +577,7 @@ async function savePriceForm(){
 function editPrice(id){ editPriceId=id; render(); window.scrollTo({top:0,behavior:'smooth'}); }
 async function delPrice(id){
   const p=DB.prices.find(x=>String(x.id)===String(id));
-  if(!confirm(`למחוק את "${p.product}" מהמחירון?`)) return;
+  if(!await uiConfirm(`למחוק את "<b>${esc(p.product)}</b>" מהמחירון?`)) return;
   await deleteRow(SHEET_PRICE,id); toast('נמחק'); await loadAll();
 }
 
@@ -659,7 +675,7 @@ async function submitExpense(){
 }
 async function delExpense(id){
   const e=DB.expenses.find(x=>String(x.id)===String(id));
-  if(!confirm(`למחוק הוצאה של ${fmtM(e.amount)}?`)) return;
+  if(!await uiConfirm(`למחוק הוצאה של <b>${fmtM(e.amount)}</b>?`)) return;
   try{ await deleteRow(SHEET_EXP,id); toast('נמחק'); await loadAll(); }
   catch(err){ setSync('err'); toast('שגיאה במחיקה'); }
 }
