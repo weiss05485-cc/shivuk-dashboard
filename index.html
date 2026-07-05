@@ -115,14 +115,16 @@ const APP_PW_HASH = '7336d9ead196fe8ac03a3c003144eea8d119040dca54285735074793d40
 // כתובת ה-Apps Script מוצפנת עם הסיסמה — נפתחת אוטומטית בכניסה, בלי הגדרה ידנית בכל מכשיר
 const GS_ENC = 'aa4f5102ed5d188f6541cf4e2c81eecb883d877d8829811cdbb802935ef4f0943bff0d010f46f7fe8e555018e64f528f9b365b2b42fe2f6c4a2f2b1eff957f0c4e53ef294b2485670e4195564eba309621b78c1f1d32c3bc2b9bd64836445dc2c8a415e42a0f3ed383c8fbc37017c3254e31';
 let GS_URL = '';                              // כתובת ה-Apps Script — מוגדרת במסך הגדרות
-const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים';
+const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים', SHEET_EXP = 'הוצאות';
 const PAY_METHODS = ['מזומן','העברה בנקאית',"צ'ק",'אחר'];
+const EXP_CATS = ['משלוח','אריזה','נסיעות','עמלות','אחר'];
 const CUSTOMERS_DEFAULT = [];   // הלקוחות נטענים מהנתונים בגיליון
 const TYPES = ['ברכסוני','העברת GB','חזרה','אחר'];
 
 /* ================= STATE ================= */
-const DB = { shipments:[], prices:[], payments:[] };
-let page = 'home', editId = null, editPayId = null, custFilter = '', typeFilter = '';
+const DB = { shipments:[], prices:[], payments:[], expenses:[] };
+let page = 'home', editId = null, editPayId = null, editPriceId = null, custFilter = '', typeFilter = '';
+let _gbItems = null; // שורות המוצרים מהמחשבון (נשמרות על המשלוח לחישוב רווח לפי מוצר)
 
 /* ================= HELPERS ================= */
 const $ = s => document.querySelector(s);
@@ -156,17 +158,23 @@ async function loadAll(){
   if(!gsUrl()){ setSync('nocfg'); if(page==='home') nav('settings'); return; }
   setSync('load');
   try{
-    const [ships, prices, pays] = await Promise.all([
+    const [ships, prices, pays, exps] = await Promise.all([
       apiGet({action:'getTable', sheet:SHEET_SHIP}),
       apiGet({action:'getTable', sheet:SHEET_PRICE}),
       apiGet({action:'getTable', sheet:SHEET_PAY}),
+      apiGet({action:'getTable', sheet:SHEET_EXP}),
     ]);
     DB.shipments = (ships.rows||[]).map(r=>({ ...r, date:stripApos(r.date), units:+r.units||0,
-      amount:(r.amount===''||r.amount==null)?'':+r.amount }));
-    DB.prices = (prices.rows||[]).map(r=>({ ...r, price:(r.price===''||r.price==null)?'':+r.price }));
+      amount:(r.amount===''||r.amount==null)?'':+r.amount,
+      cost:(r.cost===''||r.cost==null)?'':+r.cost,
+      items:(()=>{ try{ const a=JSON.parse(r.items); return Array.isArray(a)&&a.length?a:null; }catch(e){ return null; } })() }));
+    DB.prices = (prices.rows||[]).map(r=>({ ...r, price:(r.price===''||r.price==null)?'':+r.price,
+      cost:(r.cost===''||r.cost==null)?'':+r.cost }));
     DB.payments = (pays.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
+    DB.expenses = (exps.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
     DB.shipments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     DB.payments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
+    DB.expenses.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     setSync('ok'); render();
   }catch(e){ console.error(e); setSync('err'); toast('שגיאה בטעינה — בדוק את כתובת ה-Apps Script בהגדרות'); }
 }
@@ -249,7 +257,7 @@ async function doLogin(){
 function boot(){ $('#login').style.display='none'; renderNav(); render(); loadAll(); }
 
 /* ================= NAV ================= */
-const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['pay','💰 תשלומים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
+const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['pay','💰 תשלומים'], ['profit','📈 רווחים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
 function renderNav(){
   $('#nav').innerHTML = PAGES.map(([id,l])=>`<button class="${page===id?'on':''}" onclick="nav('${id}')">${l}</button>`).join('');
 }
@@ -262,6 +270,7 @@ function render(){
   else if(page==='add') m.innerHTML = viewAdd();
   else if(page==='list') m.innerHTML = viewList();
   else if(page==='pay') m.innerHTML = viewPay();
+  else if(page==='profit') m.innerHTML = viewProfit();
   else if(page==='prices') m.innerHTML = viewPrices();
   else if(page==='settings') m.innerHTML = viewSettings();
   if(page==='home') drawChart();
@@ -303,6 +312,7 @@ function viewHome(){
     <div class="kpi"><div class="lbl">סה"כ יחידות</div><div class="val">${fmtN(all.u)}</div></div>
     <div class="kpi"><div class="lbl">שולם</div><div class="val" style="color:var(--green)">${fmtM(paid)}</div></div>
     <div class="kpi"><div class="lbl">חוב פתוח</div><div class="val" style="color:${all.m-paid>0?'var(--red)':'var(--green)'}">${fmtM(all.m-paid)}</div></div>
+    <div class="kpi"><div class="lbl">רווח נקי 📈</div><div class="val" style="color:${profitData().net>=0?'var(--green)':'var(--red)'}">${fmtM(profitData().net)}</div></div>
   </div>
   <div class="custcards">${custRows}</div>
   <div class="card"><h2>מכירות לפי חודש</h2><canvas id="chart" height="110"></canvas></div>
@@ -348,17 +358,26 @@ function viewAdd(){
   </div>
   <div id="gbcalc-wrap"></div>
   <div class="frow">
-    <div><label>כמות (יח') — בחזרה להזין מינוס</label><input type="number" id="f-units" value="${s?.units??''}"></div>
-    <div><label>סכום (₪)</label><input type="number" id="f-amount" value="${s?.amount??''}"></div>
+    <div><label>כמות (יח') — בחזרה להזין מינוס</label><input type="number" id="f-units" value="${s?.units??''}" oninput="autoCost()"></div>
+    <div><label>סכום מכירה (₪)</label><input type="number" id="f-amount" value="${s?.amount??''}"></div>
+    <div><label>עלות קנייה (₪) — לחישוב רווח</label><input type="number" id="f-cost" value="${s?.cost??''}" oninput="this.dataset.auto=''"></div>
     <div><label>מס' תעודה (לא חובה)</label><input id="f-doc" value="${esc(s?.doc||'')}"></div>
   </div>
   <div class="frow"><div style="grid-column:1/-1"><label>הערות</label><input id="f-notes" value="${esc(s?.notes||'')}"></div></div>
+  ${s?.items?`<p class="note">📦 למשלוח זה שמור פירוט מוצרים מהמחשבון — שימוש חוזר במחשבון יחליף אותו.</p>`:''}
   <button class="btn" onclick="submitShipment()">${s?'💾 שמור שינויים':'💾 שמור משלוח'}</button>
   ${s?`<button class="btn sec" style="margin-inline-start:8px" onclick="editId=null;nav('list')">ביטול</button>`:''}
   </div>`;
 }
-function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return; w.innerHTML = ($('#f-type').value==='העברת GB') ? gbCalcHtml() : ''; }
-function gbCalcInit(){ gbCalcToggle(); }
+function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return; w.innerHTML = ($('#f-type').value==='העברת GB') ? gbCalcHtml() : ''; autoCost(); }
+function gbCalcInit(){ _gbItems=null; gbCalcToggle(); }
+function autoCost(){ // עלות אוטומטית לברכסוני לפי המחירון (כמות × עלות ליחידה)
+  const c=$('#f-cost'); if(!c || ($('#f-type')?.value)!=='ברכסוני') return;
+  if(c.value!=='' && c.dataset.auto!=='1') return; // לא דורסים ערך ידני
+  const p=DB.prices.find(x=>String(x.product).includes('ברכסוני') && x.cost!=='');
+  const u=+($('#f-units')?.value||0);
+  if(p && u){ c.value=u*p.cost; c.dataset.auto='1'; }
+}
 function gbCalcHtml(){
   const priced = DB.prices.filter(p=>p.price!=='');
   if(!priced.length) return '';
@@ -371,22 +390,33 @@ function gbCalcHtml(){
 }
 function gbCalc(){
   const priced = DB.prices.filter(p=>p.price!=='');
-  let total=0, units=0;
+  let total=0, units=0, cost=0, costMissing=false;
+  const items=[];
   priced.forEach((p,i)=>{
     const q=+($('#gbq-'+i)?.value||0);
     const s=q*p.price; total+=s; units+=q;
+    if(q){ items.push({p:p.product, q, sp:p.price, cp:p.cost===''?null:p.cost});
+      if(p.cost==='') costMissing=true; else cost+=q*p.cost; }
     const el=$('#gbs-'+i); if(el) el.textContent = q? fmtM(s):'';
   });
-  $('#gb-total').textContent = units? `סה"כ: ${fmtN(units)} יח' · ${fmtM(total)}` : '';
-  if(units){ $('#f-units').value=units; $('#f-amount').value=total; }
+  $('#gb-total').textContent = units? `סה"כ: ${fmtN(units)} יח' · ${fmtM(total)}${costMissing?' (חסרה עלות קנייה לחלק מהמוצרים במחירון)':''}` : '';
+  if(units){
+    $('#f-units').value=units; $('#f-amount').value=total;
+    _gbItems=items;
+    if(!costMissing){ $('#f-cost').value=cost; $('#f-cost').dataset.auto='1'; }
+  }
 }
 async function submitShipment(){
   const date=$('#f-date').value, customer=$('#f-cust').value.trim(), type=$('#f-type').value;
   const units=$('#f-units').value, amount=$('#f-amount').value;
   if(!date||!customer){ toast('חסר תאריך או לקוח'); return; }
   if(units===''){ toast('חסרה כמות'); return; }
+  const cost=$('#f-cost').value;
+  const prev = editId ? DB.shipments.find(x=>String(x.id)===String(editId)) : null;
   const rec = { id: editId || Date.now(), date:"'"+date, customer, type,
-    units:+units, amount:amount===''?'':+amount, doc:$('#f-doc').value.trim(), notes:$('#f-notes').value.trim() };
+    units:+units, amount:amount===''?'':+amount, cost:cost===''?'':+cost,
+    items: _gbItems ? JSON.stringify(_gbItems) : (prev?.items ? JSON.stringify(prev.items) : ''),
+    doc:$('#f-doc').value.trim(), notes:$('#f-notes').value.trim() };
   try{
     await saveRow(SHEET_SHIP, rec);
     toast(editId?'המשלוח עודכן ✔':'המשלוח נשמר ✔'); editId=null;
@@ -497,37 +527,141 @@ async function delPay(id){
 
 /* ---------- prices ---------- */
 function viewPrices(){
-  return `<div class="card"><h2>🏷️ מחירון GB</h2>
-  <div class="twrap"><table><tr><th>מוצר</th><th>מחיר (₪)</th><th></th></tr>
-  ${DB.prices.map(p=>`<tr><td style="white-space:normal">${esc(p.product)}</td>
+  const ep = editPriceId ? DB.prices.find(x=>String(x.id)===String(editPriceId)) : null;
+  return `<div class="card"><h2>🏷️ מחירון — מכירה, עלות ורווח</h2>
+  <div class="twrap"><table><tr><th>מוצר</th><th>מחיר מכירה</th><th>עלות קנייה</th><th>רווח ליח'</th><th></th></tr>
+  ${DB.prices.map(p=>{
+    const margin = (p.price!==''&&p.cost!=='') ? p.price-p.cost : null;
+    return `<tr><td style="white-space:normal">${esc(p.product)}</td>
     <td>${p.price===''?'<span class="tag r">אין מחיר</span>':`<b>${fmtM(p.price)}</b>`}</td>
-    <td><button class="rowbtn" onclick="editPrice('${p.id}')">✏️</button><button class="rowbtn" onclick="delPrice('${p.id}')">🗑️</button></td></tr>`).join('')
-    || '<tr><td colspan="3" class="empty">אין מוצרים במחירון</td></tr>'}
+    <td>${p.cost===''?'<span class="tag o">לא הוזן</span>':fmtM(p.cost)}</td>
+    <td>${margin==null?'—':`<b class="money ${margin<0?'neg':''}">${fmtM(margin)}</b>`}</td>
+    <td><button class="rowbtn" onclick="editPrice('${p.id}')">✏️</button><button class="rowbtn" onclick="delPrice('${p.id}')">🗑️</button></td></tr>`;}).join('')
+    || '<tr><td colspan="5" class="empty">אין מוצרים במחירון</td></tr>'}
   </table></div><br>
+  <h2>${ep?'✏️ עריכת מוצר':'➕ מוצר חדש'}</h2>
   <div class="frow">
-    <div><label>מוצר חדש</label><input id="np-name"></div>
-    <div><label>מחיר (₪)</label><input type="number" id="np-price"></div>
-    <div style="display:flex;align-items:flex-end"><button class="btn" onclick="addPrice()">➕ הוסף</button></div>
+    <div><label>שם המוצר</label><input id="np-name" value="${esc(ep?.product||'')}"></div>
+    <div><label>מחיר מכירה (₪)</label><input type="number" id="np-price" value="${ep?.price??''}"></div>
+    <div><label>עלות קנייה (₪)</label><input type="number" id="np-cost" value="${ep?.cost??''}"></div>
+    <div style="display:flex;align-items:flex-end;gap:8px">
+      <button class="btn" onclick="savePriceForm()">${ep?'💾 שמור':'➕ הוסף'}</button>
+      ${ep?`<button class="btn sec" onclick="editPriceId=null;render()">ביטול</button>`:''}
+    </div>
   </div>
-  <p class="note">המחירון משמש את "מחשבון GB" בטופס משלוח חדש.</p></div>`;
+  <p class="note">העלות משמשת לחישוב הרווחים; המחיר משמש את מחשבון ה-GB בטופס משלוח.</p></div>`;
 }
-async function addPrice(){
+async function savePriceForm(){
   const name=$('#np-name').value.trim(); if(!name){toast('חסר שם מוצר');return;}
-  const price=$('#np-price').value;
-  await saveRow(SHEET_PRICE,{id:Date.now(),product:name,price:price===''?'':+price});
-  toast('נוסף ✔'); await loadAll();
+  const price=$('#np-price').value, cost=$('#np-cost').value;
+  const base = editPriceId ? DB.prices.find(x=>String(x.id)===String(editPriceId)) : {id:Date.now()};
+  await saveRow(SHEET_PRICE,{...base, product:name, price:price===''?'':+price, cost:cost===''?'':+cost});
+  toast(editPriceId?'עודכן ✔':'נוסף ✔'); editPriceId=null; await loadAll();
 }
-async function editPrice(id){
-  const p=DB.prices.find(x=>String(x.id)===String(id));
-  const np=prompt(`מחיר עבור: ${p.product}`, p.price);
-  if(np===null) return;
-  await saveRow(SHEET_PRICE,{...p, price:np===''?'':+np});
-  toast('עודכן ✔'); await loadAll();
-}
+function editPrice(id){ editPriceId=id; render(); window.scrollTo({top:0,behavior:'smooth'}); }
 async function delPrice(id){
   const p=DB.prices.find(x=>String(x.id)===String(id));
   if(!confirm(`למחוק את "${p.product}" מהמחירון?`)) return;
   await deleteRow(SHEET_PRICE,id); toast('נמחק'); await loadAll();
+}
+
+/* ---------- profit & expenses ---------- */
+function profitData(){
+  let revenue=0, goods=0, noCost=0;
+  DB.shipments.forEach(s=>{
+    if(s.amount!=='') revenue+=s.amount;
+    if(s.cost!=='') goods+=s.cost; else if(s.amount!=='' && s.amount!==0) noCost++;
+  });
+  const expenses = DB.expenses.reduce((a,e)=>a+e.amount,0);
+  return { revenue, goods, gross:revenue-goods, expenses, net:revenue-goods-expenses, noCost };
+}
+function productProfit(){ // רווח לפי מוצר — מברכסוני (לפי המשלוח) ומפירוט המחשבון
+  const map={};
+  const add=(name,q,rev,cost,costKnown)=>{
+    const m=map[name]=map[name]||{q:0,rev:0,cost:0,unknown:false};
+    m.q+=q; m.rev+=rev; if(costKnown) m.cost+=cost; else m.unknown=true;
+  };
+  DB.shipments.forEach(s=>{
+    if(s.type==='ברכסוני'){
+      add('ברכסוני', s.units, s.amount===''?0:s.amount, s.cost===''?0:s.cost, s.cost!=='');
+    } else if(s.items){
+      s.items.forEach(it=> add(it.p, it.q, it.q*(it.sp||0), it.q*(it.cp||0), it.cp!=null));
+    }
+  });
+  return Object.entries(map).map(([name,m])=>({name,...m, profit:m.rev-m.cost}));
+}
+function viewProfit(){
+  const d = profitData();
+  const prods = productProfit();
+  const today = new Date().toISOString().slice(0,10);
+  // פירוק חודשי
+  const months={};
+  DB.shipments.forEach(s=>{ const m=String(s.date).slice(0,7); if(!m)return;
+    months[m]=months[m]||{rev:0,goods:0,exp:0};
+    if(s.amount!=='') months[m].rev+=s.amount;
+    if(s.cost!=='') months[m].goods+=s.cost; });
+  DB.expenses.forEach(e=>{ const m=String(e.date).slice(0,7); if(!m)return;
+    months[m]=months[m]||{rev:0,goods:0,exp:0}; months[m].exp+=e.amount; });
+  const mkeys=Object.keys(months).sort().reverse();
+  return `
+  <div class="kpis">
+    <div class="kpi"><div class="lbl">הכנסות</div><div class="val">${fmtM(d.revenue)}</div></div>
+    <div class="kpi"><div class="lbl">עלות סחורה</div><div class="val">${fmtM(d.goods)}</div></div>
+    <div class="kpi"><div class="lbl">רווח גולמי</div><div class="val" style="color:var(--green)">${fmtM(d.gross)}</div></div>
+    <div class="kpi"><div class="lbl">הוצאות</div><div class="val" style="color:var(--red)">${fmtM(d.expenses)}</div></div>
+    <div class="kpi"><div class="lbl">רווח נקי</div><div class="val" style="color:${d.net>=0?'var(--green)':'var(--red)'}">${fmtM(d.net)}</div></div>
+  </div>
+  ${d.noCost?`<div class="card" style="border-color:var(--gold)"><b>⚠️ ${d.noCost} משלוחים בלי עלות קנייה</b> — הרווח האמיתי נמוך מהמוצג. ערוך אותם ב"כל המשלוחים" והוסף עלות, או הוסף עלויות במחירון ואעדכן.</div>`:''}
+
+  <div class="card"><h2>➖ הוספת הוצאה</h2>
+  <div class="frow">
+    <div><label>תאריך</label><input type="date" id="e-date" value="${today}"></div>
+    <div><label>קטגוריה</label><input list="dl-expcat" id="e-cat" placeholder="משלוח / אריזה / ...">
+      <datalist id="dl-expcat">${EXP_CATS.map(c=>`<option value="${c}">`).join('')}</datalist></div>
+    <div><label>סכום (₪)</label><input type="number" id="e-amount"></div>
+    <div><label>הערות</label><input id="e-notes"></div>
+  </div>
+  <button class="btn" onclick="submitExpense()">💾 שמור הוצאה</button></div>
+
+  <div class="card"><h2>📦 רווח לפי מוצר</h2>
+  <div class="twrap"><table><tr><th>מוצר</th><th>יח' שנמכרו</th><th>הכנסות</th><th>עלות</th><th>רווח</th></tr>
+  ${prods.map(p=>`<tr><td style="white-space:normal">${esc(p.name)}</td><td>${fmtN(p.q)}</td>
+    <td class="money">${fmtM(p.rev)}</td><td>${p.unknown?'<span class="tag o">חלקי</span> ':''}${fmtM(p.cost)}</td>
+    <td class="money ${p.profit<0?'neg':''}">${p.unknown?'—':fmtM(p.profit)}</td></tr>`).join('')
+    || '<tr><td colspan="5" class="empty">אין עדיין נתוני מוצרים — משלוחי GB שיוזנו דרך המחשבון יופיעו כאן</td></tr>'}
+  </table></div>
+  <p class="note">משלוחי GB נספרים לפי מוצר רק אם הוזנו דרך המחשבון. "חלקי" = חסרה עלות לחלק מהיחידות.</p></div>
+
+  <div class="card"><h2>📅 לפי חודש</h2>
+  <div class="twrap"><table><tr><th>חודש</th><th>הכנסות</th><th>עלות סחורה</th><th>הוצאות</th><th>רווח נקי</th></tr>
+  ${mkeys.map(m=>{ const x=months[m]; const net=x.rev-x.goods-x.exp; const[y,mo]=m.split('-');
+    return `<tr><td><b>${mo}/${y.slice(2)}</b></td><td class="money">${fmtM(x.rev)}</td>
+    <td>${fmtM(x.goods)}</td><td>${fmtM(x.exp)}</td>
+    <td class="money ${net<0?'neg':''}">${fmtM(net)}</td></tr>`;}).join('')}
+  </table></div></div>
+
+  <div class="card"><h2>🧾 הוצאות (${DB.expenses.length})</h2>
+  <div class="twrap"><table><tr><th>תאריך</th><th>קטגוריה</th><th>סכום</th><th>הערות</th><th></th></tr>
+  ${DB.expenses.map(e=>`<tr><td>${fmtD(e.date)}</td><td>${esc(e.category||'')}</td>
+    <td class="money neg">${fmtM(e.amount)}</td><td style="white-space:normal;max-width:240px">${esc(e.notes||'')}</td>
+    <td><button class="rowbtn" onclick="delExpense('${e.id}')">🗑️</button></td></tr>`).join('')
+    || '<tr><td colspan="5" class="empty">עדיין לא נרשמו הוצאות</td></tr>'}
+  </table></div></div>`;
+}
+async function submitExpense(){
+  const date=$('#e-date').value, amount=$('#e-amount').value;
+  if(!date||amount===''){ toast('חסר תאריך או סכום'); return; }
+  try{
+    await saveRow(SHEET_EXP,{ id:Date.now(), date:"'"+date, category:$('#e-cat').value.trim(),
+      amount:+amount, notes:$('#e-notes').value.trim() });
+    toast('ההוצאה נשמרה ✔'); await loadAll(); nav('profit');
+  }catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
+}
+async function delExpense(id){
+  const e=DB.expenses.find(x=>String(x.id)===String(id));
+  if(!confirm(`למחוק הוצאה של ${fmtM(e.amount)}?`)) return;
+  try{ await deleteRow(SHEET_EXP,id); toast('נמחק'); await loadAll(); }
+  catch(err){ setSync('err'); toast('שגיאה במחיקה'); }
 }
 
 /* ---------- settings ---------- */
