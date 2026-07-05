@@ -118,6 +118,9 @@ let GS_URL = '';                              // כתובת ה-Apps Script — �
 const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים', SHEET_EXP = 'הוצאות';
 const PAY_METHODS = ['מזומן','העברה בנקאית',"צ'ק",'אחר'];
 const EXP_CATS = ['משלוח','אריזה','נסיעות','עמלות','אחר'];
+// מידות ברכסוני — כמו באקסלים (רגיל 12-20 + מידות צוואר 14.5-20), עמודות 32-33 / 34-35
+const BRX_SIZES = [['רגיל','12'],['רגיל','14'],['רגיל','16'],['רגיל','18'],['רגיל','20'],
+  ['','14.5'],['','15'],['','15.5'],['','16'],['','16.5'],['','17'],['','17.5'],['','18'],['','18.5'],['','19'],['','19.5'],['','20']];
 const CUSTOMERS_DEFAULT = [];   // הלקוחות נטענים מהנתונים בגיליון
 const TYPES = ['ברכסוני','העברת GB','חזרה','אחר'];
 
@@ -125,6 +128,7 @@ const TYPES = ['ברכסוני','העברת GB','חזרה','אחר'];
 const DB = { shipments:[], prices:[], payments:[], expenses:[] };
 let page = 'home', editId = null, editPayId = null, editPriceId = null, custFilter = '', typeFilter = '';
 let _gbItems = null; // שורות המוצרים מהמחשבון (נשמרות על המשלוח לחישוב רווח לפי מוצר)
+let _brxSizes = null; // פירוט מידות ברכסוני של המשלוח הנוכחי
 
 /* ================= HELPERS ================= */
 const $ = s => document.querySelector(s);
@@ -196,7 +200,8 @@ async function loadAll(){
     DB.shipments = (ships.rows||[]).map(r=>({ ...r, date:stripApos(r.date), units:+r.units||0,
       amount:(r.amount===''||r.amount==null)?'':+r.amount,
       cost:(r.cost===''||r.cost==null)?'':+r.cost,
-      items:(()=>{ try{ const a=JSON.parse(r.items); return Array.isArray(a)&&a.length?a:null; }catch(e){ return null; } })() }));
+      items:(()=>{ try{ const a=JSON.parse(r.items); return Array.isArray(a)&&a.length?a:null; }catch(e){ return null; } })(),
+      sizes:(()=>{ try{ const a=JSON.parse(r.sizes); return Array.isArray(a)&&a.length?a:null; }catch(e){ return null; } })() }));
     DB.prices = (prices.rows||[]).map(r=>({ ...r, price:(r.price===''||r.price==null)?'':+r.price,
       cost:(r.cost===''||r.cost==null)?'':+r.cost }));
     DB.payments = (pays.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
@@ -388,18 +393,23 @@ function viewAdd(){
   <div id="gbcalc-wrap"></div>
   <div class="frow">
     <div><label>כמות (יח') — בחזרה להזין מינוס</label><input type="number" id="f-units" value="${s?.units??''}" oninput="autoCost()"></div>
-    <div><label>סכום מכירה (₪)</label><input type="number" id="f-amount" value="${s?.amount??''}"></div>
+    <div><label>סכום מכירה (₪)</label><input type="number" id="f-amount" value="${s?.amount??''}" oninput="this.dataset.auto=''"></div>
     <div><label>עלות קנייה (₪) — לחישוב רווח</label><input type="number" id="f-cost" value="${s?.cost??''}" oninput="this.dataset.auto=''"></div>
     <div><label>מס' תעודה (לא חובה)</label><input id="f-doc" value="${esc(s?.doc||'')}"></div>
   </div>
   <div class="frow"><div style="grid-column:1/-1"><label>הערות</label><input id="f-notes" value="${esc(s?.notes||'')}"></div></div>
   ${s?.items?`<p class="note">📦 למשלוח זה שמור פירוט מוצרים מהמחשבון — שימוש חוזר במחשבון יחליף אותו.</p>`:''}
+  ${s?.sizes?`<p class="note">📏 למשלוח זה שמורה טבלת מידות — הערכים מולאו למעלה, שינוי יעדכן אותה.</p>`:''}
   <button class="btn" onclick="submitShipment()">${s?'💾 שמור שינויים':'💾 שמור משלוח'}</button>
   ${s?`<button class="btn sec" style="margin-inline-start:8px" onclick="editId=null;nav('list')">ביטול</button>`:''}
   </div>`;
 }
-function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return; w.innerHTML = ($('#f-type').value==='העברת GB') ? gbCalcHtml() : ''; autoCost(); }
-function gbCalcInit(){ _gbItems=null; gbCalcToggle(); }
+function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return;
+  const t=$('#f-type').value;
+  w.innerHTML = t==='העברת GB' ? gbCalcHtml() : t==='ברכסוני' ? brxSizeHtml() : '';
+  if(t==='ברכסוני') brxCalc();
+  autoCost(); }
+function gbCalcInit(){ _gbItems=null; _brxSizes=null; gbCalcToggle(); }
 function autoCost(){ // עלות אוטומטית לברכסוני לפי המחירון של הלקוח (כמות × עלות ליחידה)
   const c=$('#f-cost'); if(!c || ($('#f-type')?.value)!=='ברכסוני') return;
   if(c.value!=='' && c.dataset.auto!=='1') return; // לא דורסים ערך ידני
@@ -408,6 +418,38 @@ function autoCost(){ // עלות אוטומטית לברכסוני לפי המח
   if(p && p.cost!=='' && u){ c.value=u*p.cost; c.dataset.auto='1'; }
 }
 function gbPriced(){ return DB.prices.filter(p=>p.price!=='' && !String(p.product).includes('ברכסוני')); }
+// טבלת מידות ברכסוני — כמו האקסל
+function brxSizeHtml(){
+  const s = editId ? DB.shipments.find(x=>String(x.id)===String(editId)) : null;
+  const saved = {}; if(s?.sizes) s.sizes.forEach(z=>saved[z.k+'|'+z.s]={a:z.a,b:z.b});
+  return `<div class="gbcalc"><b style="font-size:14px">📏 טבלת מידות — הזן כמה בכל מידה, הסה"כ מחושב לבד</b>
+    <div class="twrap" style="margin-top:10px"><table style="font-size:13px">
+    <tr><th>סוג</th><th>מידה</th><th>32-33</th><th>34-35</th><th>סה"כ</th></tr>
+    ${BRX_SIZES.map((r,i)=>{ const v=saved[r[0]+'|'+r[1]]||{};
+      return `<tr><td>${r[0]||''}</td><td><b>${r[1]}</b></td>
+      <td><input type="number" min="0" id="bx-a-${i}" value="${v.a||''}" oninput="brxCalc()" style="width:70px;padding:5px"></td>
+      <td><input type="number" min="0" id="bx-b-${i}" value="${v.b||''}" oninput="brxCalc()" style="width:70px;padding:5px"></td>
+      <td class="sum" id="bx-t-${i}"></td></tr>`; }).join('')}
+    </table></div>
+    <div style="text-align:left;font-weight:900;color:var(--blue);margin-top:6px" id="bx-total"></div></div>`;
+}
+function brxCalc(){
+  let units=0; const sizes=[];
+  BRX_SIZES.forEach((r,i)=>{
+    const a=+($('#bx-a-'+i)?.value||0), b=+($('#bx-b-'+i)?.value||0), t=a+b;
+    units+=t; const el=$('#bx-t-'+i); if(el) el.textContent=t||'';
+    if(a||b) sizes.push({k:r[0], s:r[1], a, b});
+  });
+  const el=$('#bx-total'); if(el) el.textContent = units? `סה"כ: ${fmtN(units)} יח'` : '';
+  _brxSizes = sizes.length ? sizes : null;
+  if(units){
+    const u=$('#f-units'); if(u){ u.value=units; }
+    const p=brxPriceRow($('#f-cust')?.value||'');
+    const am=$('#f-amount');
+    if(p && p.price!=='' && am && (am.value==='' || am.dataset.auto==='1')){ am.value=units*p.price; am.dataset.auto='1'; }
+    autoCost();
+  }
+}
 function gbCalcHtml(){
   const priced = gbPriced();
   if(!priced.length) return '';
@@ -446,6 +488,7 @@ async function submitShipment(){
   const rec = { id: editId || Date.now(), date:"'"+date, customer, type,
     units:+units, amount:amount===''?'':+amount, cost:cost===''?'':+cost,
     items: _gbItems ? JSON.stringify(_gbItems) : (prev?.items ? JSON.stringify(prev.items) : ''),
+    sizes: _brxSizes ? JSON.stringify(_brxSizes) : (type==='ברכסוני'&&prev?.sizes ? JSON.stringify(prev.sizes) : ''),
     doc:$('#f-doc').value.trim(), notes:$('#f-notes').value.trim() };
   try{
     await saveRow(SHEET_SHIP, rec);
@@ -477,11 +520,42 @@ function viewList(){
       <td>${fmtN(s.units)}</td>
       <td class="money ${s.amount<0?'neg':''}">${fmtM(s.amount)}</td>
       <td>${esc(s.doc||'')}</td><td style="white-space:normal;max-width:220px">${esc(s.notes||'')}</td>
-      <td><button class="rowbtn" onclick="editShip('${s.id}')">✏️</button><button class="rowbtn" onclick="delShip('${s.id}')">🗑️</button></td>
+      <td>${(s.sizes||s.items)?`<button class="rowbtn" onclick="showDetails('${s.id}')" title="פירוט מה נשלח">📋</button>`:''}<button class="rowbtn" onclick="editShip('${s.id}')">✏️</button><button class="rowbtn" onclick="delShip('${s.id}')">🗑️</button></td>
     </tr>`).join('') || '<tr><td colspan="8" class="empty">אין משלוחים</td></tr>'}
     <tr><td style="font-weight:900">סה"כ</td><td></td><td></td>
       <td style="font-weight:900">${fmtN(t.u)}</td><td class="money">${fmtM(t.m)}</td><td></td><td></td><td></td></tr>
   </table></div></div>`;
+}
+function showDetails(id){
+  const s=DB.shipments.find(x=>String(x.id)===String(id));
+  let html='';
+  if(s.sizes){
+    html=`<div class="twrap"><table style="width:100%;font-size:14px">
+      <tr><th>סוג</th><th>מידה</th><th>32-33</th><th>34-35</th><th>סה"כ</th></tr>
+      ${s.sizes.map(z=>`<tr><td>${esc(z.k||'')}</td><td><b>${esc(z.s)}</b></td>
+        <td>${z.a||'—'}</td><td>${z.b||'—'}</td><td><b>${(+z.a||0)+(+z.b||0)}</b></td></tr>`).join('')}
+      <tr style="background:#fff2cc"><td colspan="4" style="text-align:left;font-weight:900">סה"כ יחידות</td><td><b>${fmtN(s.units)}</b></td></tr>
+      </table></div>`;
+  } else if(s.items){
+    html=`<div class="twrap"><table style="width:100%;font-size:14px"><tr><th>מוצר</th><th>כמות</th></tr>
+      ${s.items.map(it=>`<tr><td style="text-align:right">${esc(it.p)}</td><td><b>${it.q}</b></td></tr>`).join('')}
+      <tr style="background:#fff2cc"><td style="text-align:left;font-weight:900">סה"כ</td><td><b>${fmtN(s.units)}</b></td></tr>
+      </table></div>`;
+  } else { html='<p>אין פירוט שמור למשלוח זה.</p>'; }
+  uiInfo(`📋 ${esc(s.customer)} · ${fmtD(s.date)} · ${esc(s.type)}`, html);
+}
+function uiInfo(title, bodyHtml){
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML=`<div style="background:#fff;border-radius:16px;padding:22px;width:min(460px,95vw);max-height:88vh;overflow:auto;box-shadow:0 18px 50px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:700;color:var(--blue);margin-bottom:14px">${title}</div>
+    ${bodyHtml}
+    <div style="text-align:center;margin-top:16px"><button class="btn">סגור</button></div></div>`;
+  document.body.appendChild(ov);
+  const close=()=>ov.remove();
+  ov.querySelector('.btn').onclick=close;
+  ov.onclick=e=>{ if(e.target===ov) close(); };
+  document.addEventListener('keydown',function esc(e){ if(e.key==='Escape'){document.removeEventListener('keydown',esc);close();} });
 }
 function editShip(id){ editId=id; nav('add'); }
 async function delShip(id){
