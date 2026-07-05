@@ -152,6 +152,19 @@ function fmtD(d){ d=String(stripApos(d)).slice(0,10); const p=d.split('-'); retu
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); DB.payments.forEach(p=>p.customer&&set.add(p.customer)); return [...set]; }
 function paidOf(c){ return DB.payments.filter(p=>!c||p.customer===c).reduce((a,p)=>a+(+p.amount||0),0); }
+// שורת מחירון ברכסוני המתאימה ללקוח (למשל "ברכסוני גוטסמן" → כל לקוח שמכיל "גוטסמן")
+function brxPriceRow(customer){
+  const c=String(customer||'');
+  return DB.prices.find(p=>{ const n=String(p.product); if(!n.includes('ברכסוני')) return false;
+    const kw=n.replace(/ברכסוני/g,'').trim(); return kw && (c.includes(kw)||kw.includes(c)); })
+    || DB.prices.find(p=>String(p.product).trim()==='ברכסוני'); // נפילה חזרה לשורת ברכסוני יחידה
+}
+// עלות משלוח: עלות מפורשת אם קיימת, אחרת גזורה מהמחירון (ברכסוני = כמות × עלות ליח'). null = לא ידוע
+function shipCost(s){
+  if(s.cost!=='') return s.cost;
+  if(s.type==='ברכסוני'){ const p=brxPriceRow(s.customer); if(p && p.cost!=='') return s.units*p.cost; }
+  return null;
+}
 function tagCls(t){ return t==='ברכסוני'?'b':t==='העברת GB'?'g':t==='חזרה'?'r':'o'; }
 
 /* ================= API (Google Apps Script) ================= */
@@ -367,7 +380,7 @@ function viewAdd(){
   <div class="frow">
     <div><label>תאריך</label><input type="date" id="f-date" value="${s?String(s.date).slice(0,10):today}"></div>
     <div><label>לקוח</label>
-      <input list="dl-cust" id="f-cust" value="${esc(s?.customer||'')}" placeholder="בחר או הקלד לקוח חדש">
+      <input list="dl-cust" id="f-cust" value="${esc(s?.customer||'')}" placeholder="בחר או הקלד לקוח חדש" oninput="autoCost()">
       <datalist id="dl-cust">${customers().map(c=>`<option value="${esc(c)}">`).join('')}</datalist></div>
     <div><label>סוג</label><select id="f-type" onchange="gbCalcToggle()">
       ${TYPES.map(t=>`<option ${s?.type===t?'selected':''}>${t}</option>`).join('')}</select></div>
@@ -387,15 +400,16 @@ function viewAdd(){
 }
 function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return; w.innerHTML = ($('#f-type').value==='העברת GB') ? gbCalcHtml() : ''; autoCost(); }
 function gbCalcInit(){ _gbItems=null; gbCalcToggle(); }
-function autoCost(){ // עלות אוטומטית לברכסוני לפי המחירון (כמות × עלות ליחידה)
+function autoCost(){ // עלות אוטומטית לברכסוני לפי המחירון של הלקוח (כמות × עלות ליחידה)
   const c=$('#f-cost'); if(!c || ($('#f-type')?.value)!=='ברכסוני') return;
   if(c.value!=='' && c.dataset.auto!=='1') return; // לא דורסים ערך ידני
-  const p=DB.prices.find(x=>String(x.product).includes('ברכסוני') && x.cost!=='');
+  const p=brxPriceRow($('#f-cust')?.value||'');
   const u=+($('#f-units')?.value||0);
-  if(p && u){ c.value=u*p.cost; c.dataset.auto='1'; }
+  if(p && p.cost!=='' && u){ c.value=u*p.cost; c.dataset.auto='1'; }
 }
+function gbPriced(){ return DB.prices.filter(p=>p.price!=='' && !String(p.product).includes('ברכסוני')); }
 function gbCalcHtml(){
-  const priced = DB.prices.filter(p=>p.price!=='');
+  const priced = gbPriced();
   if(!priced.length) return '';
   return `<div class="gbcalc"><b style="font-size:14px">🧮 מחשבון GB — הזן כמויות והסכום יחושב לבד</b><br><br>
     ${priced.map((p,i)=>`<div class="gbline">
@@ -405,7 +419,7 @@ function gbCalcHtml(){
     <div style="text-align:left;font-weight:900;color:var(--blue)" id="gb-total"></div></div>`;
 }
 function gbCalc(){
-  const priced = DB.prices.filter(p=>p.price!=='');
+  const priced = gbPriced();
   let total=0, units=0, cost=0, costMissing=false;
   const items=[];
   priced.forEach((p,i)=>{
@@ -586,7 +600,8 @@ function profitData(){
   let revenue=0, goods=0, noCost=0;
   DB.shipments.forEach(s=>{
     if(s.amount!=='') revenue+=s.amount;
-    if(s.cost!=='') goods+=s.cost; else if(s.amount!=='' && s.amount!==0) noCost++;
+    const c=shipCost(s);
+    if(c!=null) goods+=c; else if(s.amount!=='' && s.amount!==0) noCost++;
   });
   const expenses = DB.expenses.reduce((a,e)=>a+e.amount,0);
   return { revenue, goods, gross:revenue-goods, expenses, net:revenue-goods-expenses, noCost };
@@ -599,7 +614,9 @@ function productProfit(){ // רווח לפי מוצר — מברכסוני (לפ
   };
   DB.shipments.forEach(s=>{
     if(s.type==='ברכסוני'){
-      add('ברכסוני', s.units, s.amount===''?0:s.amount, s.cost===''?0:s.cost, s.cost!=='');
+      const c=shipCost(s), row=brxPriceRow(s.customer);
+      const label = row ? row.product : 'ברכסוני';
+      add(label, s.units, s.amount===''?0:s.amount, c==null?0:c, c!=null);
     } else if(s.items){
       s.items.forEach(it=> add(it.p, it.q, it.q*(it.sp||0), it.q*(it.cp||0), it.cp!=null));
     }
@@ -615,7 +632,7 @@ function viewProfit(){
   DB.shipments.forEach(s=>{ const m=String(s.date).slice(0,7); if(!m)return;
     months[m]=months[m]||{rev:0,goods:0,exp:0};
     if(s.amount!=='') months[m].rev+=s.amount;
-    if(s.cost!=='') months[m].goods+=s.cost; });
+    const c=shipCost(s); if(c!=null) months[m].goods+=c; });
   DB.expenses.forEach(e=>{ const m=String(e.date).slice(0,7); if(!m)return;
     months[m]=months[m]||{rev:0,goods:0,exp:0}; months[m].exp+=e.amount; });
   const mkeys=Object.keys(months).sort().reverse();
