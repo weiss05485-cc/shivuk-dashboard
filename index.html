@@ -133,13 +133,13 @@ let _brxSizes = null; // פירוט מידות ברכסוני של המשלוח 
 /* ================= HELPERS ================= */
 const $ = s => document.querySelector(s);
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.style.display='block'; clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',2600); }
-function uiConfirm(msg, okLabel){ // דיאלוג מעוצב במקום confirm של הדפדפן
+function uiConfirm(msg, okLabel, danger=true){ // דיאלוג מעוצב במקום confirm של הדפדפן
   return new Promise(res=>{
     const ov=document.createElement('div');
     ov.style.cssText='position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:90;display:flex;align-items:center;justify-content:center';
     ov.innerHTML=`<div style="background:#fff;border-radius:16px;padding:24px;width:min(340px,90vw);text-align:center;box-shadow:0 18px 50px rgba(0,0,0,.3)">
       <div style="font-size:15px;margin-bottom:18px;line-height:1.5">${msg}</div>
-      <button class="btn danger" data-x="1">${okLabel||'מחק'}</button>
+      <button class="btn ${danger?'danger':''}" data-x="1">${okLabel||'מחק'}</button>
       <button class="btn sec" style="margin-inline-start:8px">ביטול</button></div>`;
     document.body.appendChild(ov);
     const done=v=>{ov.remove();res(v);};
@@ -491,9 +491,12 @@ async function submitShipment(){
     sizes: _brxSizes ? JSON.stringify(_brxSizes) : (type==='ברכסוני'&&prev?.sizes ? JSON.stringify(prev.sizes) : ''),
     doc:$('#f-doc').value.trim(), notes:$('#f-notes').value.trim() };
   try{
+    const sid=rec.id, wasEdit=!!editId;
     await saveRow(SHEET_SHIP, rec);
-    toast(editId?'המשלוח עודכן ✔':'המשלוח נשמר ✔'); editId=null;
-    await loadAll(); nav('home');
+    editId=null; _gbItems=null; _brxSizes=null;
+    await loadAll();
+    if(await uiConfirm((wasEdit?'המשלוח עודכן':'המשלוח נשמר')+' ✔<br>להוציא תעודת משלוח?','🖨️ תעודת משלוח',false)) printDeliveryNote(sid);
+    nav('list');
   }catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
 }
 
@@ -520,7 +523,7 @@ function viewList(){
       <td>${fmtN(s.units)}</td>
       <td class="money ${s.amount<0?'neg':''}">${fmtM(s.amount)}</td>
       <td>${esc(s.doc||'')}</td><td style="white-space:normal;max-width:220px">${esc(s.notes||'')}</td>
-      <td>${(s.sizes||s.items)?`<button class="rowbtn" onclick="showDetails('${s.id}')" title="פירוט מה נשלח">📋</button>`:''}<button class="rowbtn" onclick="editShip('${s.id}')">✏️</button><button class="rowbtn" onclick="delShip('${s.id}')">🗑️</button></td>
+      <td><button class="rowbtn" onclick="printDeliveryNote('${s.id}')" title="תעודת משלוח">🖨️</button>${(s.sizes||s.items)?`<button class="rowbtn" onclick="showDetails('${s.id}')" title="פירוט מה נשלח">📋</button>`:''}<button class="rowbtn" onclick="editShip('${s.id}')">✏️</button><button class="rowbtn" onclick="delShip('${s.id}')">🗑️</button></td>
     </tr>`).join('') || '<tr><td colspan="8" class="empty">אין משלוחים</td></tr>'}
     <tr><td style="font-weight:900">סה"כ</td><td></td><td></td>
       <td style="font-weight:900">${fmtN(t.u)}</td><td class="money">${fmtM(t.m)}</td><td></td><td></td><td></td></tr>
@@ -556,6 +559,55 @@ function uiInfo(title, bodyHtml){
   ov.querySelector('.btn').onclick=close;
   ov.onclick=e=>{ if(e.target===ov) close(); };
   document.addEventListener('keydown',function esc(e){ if(e.key==='Escape'){document.removeEventListener('keydown',esc);close();} });
+}
+function bizInfo(){ return { name: localStorage.getItem('shivuk_biz')||'', sub: localStorage.getItem('shivuk_bizsub')||'' }; }
+function printDeliveryNote(id){
+  const s=DB.shipments.find(x=>String(x.id)===String(id)); if(!s) return;
+  const b=bizInfo();
+  let rowsHtml='';
+  if(s.sizes){
+    rowsHtml=`<table><thead><tr><th>סוג</th><th>מידה</th><th>32-33</th><th>34-35</th><th>כמות</th></tr></thead><tbody>`+
+      s.sizes.map(z=>`<tr><td>${esc(z.k||'')}</td><td>${esc(z.s)}</td><td>${z.a||''}</td><td>${z.b||''}</td><td>${(+z.a||0)+(+z.b||0)}</td></tr>`).join('')+
+      `</tbody></table>`;
+  } else if(s.items){
+    rowsHtml=`<table><thead><tr><th>פריט</th><th>כמות</th></tr></thead><tbody>`+
+      s.items.map(it=>`<tr><td style="text-align:right">${esc(it.p)}</td><td>${it.q}</td></tr>`).join('')+`</tbody></table>`;
+  } else {
+    rowsHtml=`<table><thead><tr><th>תיאור</th><th>כמות</th></tr></thead><tbody><tr><td>${esc(s.type)}${s.notes?' — '+esc(s.notes):''}</td><td>${fmtN(s.units)}</td></tr></tbody></table>`;
+  }
+  const docNo = s.doc || String(s.id).slice(-6);
+  const amountLine = (s.amount!==''&&s.amount!=null) ? ` &nbsp;|&nbsp; לתשלום: ${fmtM(s.amount)}` : '';
+  const html = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>תעודת משלוח ${esc(docNo)}</title>
+  <style>
+    *{font-family:Arial,sans-serif;box-sizing:border-box}
+    body{margin:0;padding:26px;color:#111}
+    .hdr{text-align:center;border-bottom:3px solid #1f4e78;padding-bottom:10px;margin-bottom:14px}
+    .hdr h1{margin:0;font-size:26px;color:#1f4e78}
+    .hdr .sub{color:#555;font-size:13px;margin-top:4px}
+    .title{font-size:20px;font-weight:bold;margin:12px 0}
+    .meta{display:flex;justify-content:space-between;font-size:15px;margin-bottom:12px;flex-wrap:wrap;gap:8px}
+    .meta b{color:#1f4e78}
+    table{width:100%;border-collapse:collapse;margin-top:6px}
+    th,td{border:1px solid #999;padding:7px 9px;text-align:center;font-size:14px}
+    th{background:#e9eef5;color:#1f4e78}
+    .total{margin-top:14px;font-size:17px;font-weight:bold;text-align:left;background:#fff6da;padding:8px 12px;border-radius:6px;display:inline-block;float:left}
+    .sign{display:flex;justify-content:space-between;margin-top:70px;font-size:14px;clear:both}
+    .sign div{border-top:1px solid #333;padding-top:6px;width:40%;text-align:center;color:#555}
+    .noprint{text-align:center;margin-bottom:14px}
+    .noprint button{padding:10px 26px;font-size:15px;background:#1f4e78;color:#fff;border:0;border-radius:8px;cursor:pointer}
+    @media print{ body{padding:0} .noprint{display:none} }
+  </style></head><body>
+  <div class="noprint"><button onclick="window.print()">🖨️ הדפסה</button></div>
+  <div class="hdr"><h1>${esc(b.name||'תעודת משלוח')}</h1>${b.sub?`<div class="sub">${esc(b.sub)}</div>`:''}</div>
+  <div class="title">תעודת משלוח מס׳ ${esc(docNo)}</div>
+  <div class="meta"><div>לכבוד: <b>${esc(s.customer)}</b></div><div>תאריך: <b>${fmtD(s.date)}</b></div><div>סוג: <b>${esc(s.type)}</b></div></div>
+  ${rowsHtml}
+  <div class="total">סה"כ יחידות: ${fmtN(s.units)}${amountLine}</div>
+  <div class="sign"><div>חתימת המוסר</div><div>חתימת המקבל</div></div>
+  </body></html>`;
+  const w=window.open('','_blank');
+  if(!w){ toast('חלון ההדפסה נחסם — יש לאשר חלונות קופצים'); return; }
+  w.document.write(html); w.document.close();
 }
 function editShip(id){ editId=id; nav('add'); }
 async function delShip(id){
@@ -773,12 +825,25 @@ async function delExpense(id){
 
 /* ---------- settings ---------- */
 function viewSettings(){
-  return `<div class="card"><h2>⚙️ הגדרות</h2>
+  const b=bizInfo();
+  return `<div class="card"><h2>🖨️ פרטי העסק לתעודת משלוח</h2>
+  <div class="frow">
+    <div><label>שם העסק (כותרת התעודה)</label><input id="set-biz" value="${esc(b.name)}" placeholder="לדוגמה: ברכסוני שיווק"></div>
+    <div><label>שורת פרטים (טלפון/כתובת — לא חובה)</label><input id="set-bizsub" value="${esc(b.sub)}" placeholder="טל׳ ... | כתובת ..."></div>
+  </div>
+  <button class="btn" onclick="saveBiz()">💾 שמור פרטי עסק</button></div>
+
+  <div class="card"><h2>⚙️ חיבור ומערכת</h2>
   <label>כתובת ה-Apps Script (מסתיימת ב-/exec)</label>
   <input id="set-gs" value="${esc(gsUrl())}" placeholder="https://script.google.com/macros/s/..../exec" style="direction:ltr;text-align:left">
   <br><br><button class="btn" onclick="saveSettings()">💾 שמור ובדוק חיבור</button>
   <button class="btn sec" style="margin-inline-start:8px" onclick="localStorage.removeItem('shivuk_auth');location.reload()">🚪 יציאה</button>
-  <br><br><p class="note">ההגדרה נשמרת במכשיר הזה. יש להזין אותה פעם אחת בכל מכשיר (טלפון/מחשב).</p></div>`;
+  <br><br><p class="note">ההגדרות נשמרות במכשיר הזה.</p></div>`;
+}
+function saveBiz(){
+  localStorage.setItem('shivuk_biz',$('#set-biz').value.trim());
+  localStorage.setItem('shivuk_bizsub',$('#set-bizsub').value.trim());
+  toast('פרטי העסק נשמרו ✔');
 }
 async function saveSettings(){
   const u=$('#set-gs').value.trim();
