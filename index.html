@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 :root{
   --blue:#1f4e78; --blue2:#2e6da4; --bg:#f4f6fa; --card:#fff; --line:#e3e8f0;
@@ -121,6 +122,15 @@ const EXP_CATS = ['משלוח','אריזה','נסיעות','עמלות','אחר'
 // מידות ברכסוני — כמו באקסלים (רגיל 12-20 + מידות צוואר 14.5-20), עמודות 32-33 / 34-35
 const BRX_SIZES = [['רגיל','12'],['רגיל','14'],['רגיל','16'],['רגיל','18'],['רגיל','20'],
   ['','14.5'],['','15'],['','15.5'],['','16'],['','16.5'],['','17'],['','17.5'],['','18'],['','18.5'],['','19'],['','19.5'],['','20']];
+// מק"ט (2 ספרות אחרונות בקוד הדגם שבברקוד) → סוג מוצר (לפי לוגיקת ARNET)
+const MAKAM_KIND = {
+  '20':'bek_half','39':'bek_half',
+  '10':'bek_full','11':'bek_full',
+  '22':'raz','51':'raz','52':'raz','12':'raz',
+  '21':'amer','32':'amer',
+  '33':'suit','65':'suit','23':'suit','24':'suit','63':'suit','64':'suit',
+  '01':'suit3','02':'suit3','03':'suit3','05':'suit3',
+  '25':'pants','26':'pants','27':'pants' };
 const CUSTOMERS_DEFAULT = [];   // הלקוחות נטענים מהנתונים בגיליון
 const TYPES = ['ברכסוני','העברת GB','חזרה','אחר'];
 
@@ -453,12 +463,87 @@ function brxCalc(){
 function gbCalcHtml(){
   const priced = gbPriced();
   if(!priced.length) return '';
-  return `<div class="gbcalc"><b style="font-size:14px">🧮 מחשבון GB — הזן כמויות והסכום יחושב לבד</b><br><br>
+  return `<div class="gbcalc"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <b style="font-size:14px">🧮 מחשבון GB — הזן כמויות או ייבא קובץ ברקודים</b>
+    <label class="btn sec" style="padding:8px 14px;font-size:13px;cursor:pointer">📁 ייבוא אקסל ברקודים
+      <input type="file" accept=".xls,.xlsx,.csv" style="display:none" onchange="importGbExcel(event)"></label></div><br>
     ${priced.map((p,i)=>`<div class="gbline">
       <span style="font-size:14px">${esc(p.product)} <span class="note">(${fmtM(p.price)})</span></span>
       <input type="number" min="0" id="gbq-${i}" oninput="gbCalc()" placeholder="0">
       <span class="sum" id="gbs-${i}"></span></div>`).join('')}
     <div style="text-align:left;font-weight:900;color:var(--blue)" id="gb-total"></div></div>`;
+}
+// --- ייבוא קובץ ברקודים ל-GB ---
+function parseMakam(bc){ bc=String(bc).trim().toUpperCase(); if(bc.length<8) return null; return bc.slice(3,7).slice(2); }
+function kindToRow(kind){
+  const P=DB.prices, txt=p=>String(p.product), has=(p,...k)=>k.every(x=>txt(p).includes(x)), not=(p,...k)=>k.every(x=>!txt(p).includes(x));
+  const f=fn=>P.find(p=>txt(p).includes('ברכסוני')?false:fn(p));
+  switch(kind){
+    case 'bek_full': return f(p=>has(p,'בעקיטשע','מלאה'));
+    case 'bek_half': return f(p=>has(p,'בעקיטשע') && not(p,'מלאה'));
+    case 'raz':      return f(p=>txt(p).includes('ראז'));
+    case 'amer':     return f(p=>txt(p).includes('אמריקאי'));
+    case 'suit3':    return f(p=>has(p,'חליפה','חלקים'));
+    case 'suit':     return f(p=>has(p,'חליפה') && not(p,'אמריקאי','חלקים'));
+    case 'pants':    return f(p=>txt(p).includes('מכנס')||txt(p).includes('ווסט'));
+  }
+  return null;
+}
+function importGbExcel(ev){
+  const file=ev.target.files[0]; ev.target.value='';
+  if(!file) return;
+  if(typeof XLSX==='undefined'){ toast('ספריית האקסל עדיין נטענת — נסה שוב בעוד רגע'); return; }
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      processGbRows(XLSX.utils.sheet_to_json(ws,{header:1,raw:true}));
+    }catch(err){ console.error(err); toast('שגיאה בקריאת הקובץ'); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function processGbRows(rows){
+  let bcCol=0, qCol=1, startRow=0;
+  for(let i=0;i<Math.min(rows.length,6);i++){ (rows[i]||[]).forEach((c,j)=>{ const v=String(c||'');
+    if(v.includes('ברקוד')){ bcCol=j; startRow=i+1; } if(v.includes('כמות')||v==='כמ'){ qCol=j; } }); }
+  const agg={}, unmapped=[];
+  for(let i=startRow;i<rows.length;i++){
+    const r=rows[i]||[]; let bc=String(r[bcCol]==null?'':r[bcCol]).trim();
+    if(!bc || bc.includes('ברקוד') || bc.includes('סה')) continue;
+    const q=+(r[qCol]||0)||1;
+    const makam=parseMakam(bc), kind=makam?MAKAM_KIND[makam]:null, row=kind?kindToRow(kind):null;
+    if(row) agg[row.product]=(agg[row.product]||0)+q;
+    else unmapped.push({bc,q,makam:makam||'?'});
+  }
+  showGbPreview(agg, unmapped);
+}
+function showGbPreview(agg, unmapped){
+  const items=Object.entries(agg), total=items.reduce((a,[,q])=>a+q,0);
+  const body=`
+    ${items.length?`<div class="twrap"><table style="width:100%;font-size:14px"><tr><th>מוצר</th><th>כמות</th></tr>
+      ${items.map(([p,q])=>`<tr><td style="text-align:right">${esc(p)}</td><td><b>${q}</b></td></tr>`).join('')}
+      <tr style="background:#fff2cc"><td style="text-align:left;font-weight:900">סה"כ</td><td><b>${fmtN(total)}</b></td></tr></table></div>`
+      :'<p style="color:var(--red)">לא זוהו מוצרים בקובץ. ודא שיש עמודת "ברקוד" ועמודת "כמות".</p>'}
+    ${unmapped.length?`<p class="note" style="color:var(--red);margin-top:10px">⚠️ ${unmapped.length} ברקודים לא זוהו (מק"ט: ${[...new Set(unmapped.map(u=>u.makam))].join(', ')}) — לא ייכללו. ניתן להוסיפם ידנית.</p>`:''}`;
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML=`<div style="background:#fff;border-radius:16px;padding:22px;width:min(460px,95vw);max-height:88vh;overflow:auto;box-shadow:0 18px 50px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:700;color:var(--blue);margin-bottom:12px">📁 תצוגה מקדימה — ייבוא ברקודים</div>
+    ${body}
+    <div style="text-align:center;margin-top:16px">
+      ${items.length?'<button class="btn" data-ok="1">✅ מלא בהזמנה</button>':''}
+      <button class="btn sec" style="margin-inline-start:8px">ביטול</button></div></div>`;
+  document.body.appendChild(ov);
+  const close=()=>ov.remove();
+  const okBtn=ov.querySelector('[data-ok]'); if(okBtn) okBtn.onclick=()=>{ applyGbImport(agg); close(); };
+  ov.querySelector('.btn.sec').onclick=close;
+  ov.onclick=e=>{ if(e.target===ov) close(); };
+}
+function applyGbImport(agg){
+  gbPriced().forEach((p,i)=>{ const el=$('#gbq-'+i); if(el) el.value = agg[p.product]!=null ? agg[p.product] : ''; });
+  gbCalc();
+  toast('הייבוא הוזן במחשבון ✔');
 }
 function gbCalc(){
   const priced = gbPriced();
