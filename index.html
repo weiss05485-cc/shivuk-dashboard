@@ -139,6 +139,8 @@ const DB = { shipments:[], prices:[], payments:[], expenses:[] };
 let page = 'home', editId = null, editPayId = null, editPriceId = null, custFilter = '', typeFilter = '';
 let _gbItems = null; // שורות המוצרים מהמחשבון (נשמרות על המשלוח לחישוב רווח לפי מוצר)
 let _brxSizes = null; // פירוט מידות ברכסוני של המשלוח הנוכחי
+let _gbImportSizes = null; // מידות לכל מוצר מייבוא הברקודים {מוצר:{מידה:כמות}}
+const _selShip = new Set(); // משלוחים שנבחרו לתעודה משולבת
 
 /* ================= HELPERS ================= */
 const $ = s => document.querySelector(s);
@@ -419,7 +421,7 @@ function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return;
   w.innerHTML = t==='העברת GB' ? gbCalcHtml() : t==='ברכסוני' ? brxSizeHtml() : '';
   if(t==='ברכסוני') brxCalc();
   autoCost(); }
-function gbCalcInit(){ _gbItems=null; _brxSizes=null; gbCalcToggle(); }
+function gbCalcInit(){ _gbItems=null; _brxSizes=null; _gbImportSizes=null; gbCalcToggle(); }
 function autoCost(){ // עלות אוטומטית לברכסוני לפי המחירון של הלקוח (כמות × עלות ליחידה)
   const c=$('#f-cost'); if(!c || ($('#f-type')?.value)!=='ברכסוני') return;
   if(c.value!=='' && c.dataset.auto!=='1') return; // לא דורסים ערך ידני
@@ -507,23 +509,24 @@ function processGbRows(rows){
   let bcCol=0, qCol=1, startRow=0;
   for(let i=0;i<Math.min(rows.length,6);i++){ (rows[i]||[]).forEach((c,j)=>{ const v=String(c||'');
     if(v.includes('ברקוד')){ bcCol=j; startRow=i+1; } if(v.includes('כמות')||v==='כמ'){ qCol=j; } }); }
-  const agg={}, unmapped=[];
+  const agg={}, unmapped=[];   // agg[product] = {q, sizes:{מידה:כמות}}
   for(let i=startRow;i<rows.length;i++){
     const r=rows[i]||[]; let bc=String(r[bcCol]==null?'':r[bcCol]).trim();
     if(!bc || bc.includes('ברקוד') || bc.includes('סה')) continue;
     const q=+(r[qCol]||0)||1;
     const makam=parseMakam(bc), kind=makam?MAKAM_KIND[makam]:null, row=kind?kindToRow(kind):null;
-    if(row) agg[row.product]=(agg[row.product]||0)+q;
+    if(row){ const P=row.product, sz=bc.slice(8)||'—';
+      agg[P]=agg[P]||{q:0,sizes:{}}; agg[P].q+=q; agg[P].sizes[sz]=(agg[P].sizes[sz]||0)+q; }
     else unmapped.push({bc,q,makam:makam||'?'});
   }
   showGbPreview(agg, unmapped);
 }
 function showGbPreview(agg, unmapped){
-  const items=Object.entries(agg), total=items.reduce((a,[,q])=>a+q,0);
+  const items=Object.entries(agg), total=items.reduce((a,[,v])=>a+v.q,0);
   const body=`
-    ${items.length?`<div class="twrap"><table style="width:100%;font-size:14px"><tr><th>מוצר</th><th>כמות</th></tr>
-      ${items.map(([p,q])=>`<tr><td style="text-align:right">${esc(p)}</td><td><b>${q}</b></td></tr>`).join('')}
-      <tr style="background:#fff2cc"><td style="text-align:left;font-weight:900">סה"כ</td><td><b>${fmtN(total)}</b></td></tr></table></div>`
+    ${items.length?`<div class="twrap"><table style="width:100%;font-size:14px"><tr><th>מוצר</th><th>מידות</th><th>כמות</th></tr>
+      ${items.map(([p,v])=>`<tr><td style="text-align:right">${esc(p)}</td><td style="font-size:11px;color:#666">${esc(szStr(v.sizes))}</td><td><b>${v.q}</b></td></tr>`).join('')}
+      <tr style="background:#fff2cc"><td colspan="2" style="text-align:left;font-weight:900">סה"כ</td><td><b>${fmtN(total)}</b></td></tr></table></div>`
       :'<p style="color:var(--red)">לא זוהו מוצרים בקובץ. ודא שיש עמודת "ברקוד" ועמודת "כמות".</p>'}
     ${unmapped.length?`<p class="note" style="color:var(--red);margin-top:10px">⚠️ ${unmapped.length} ברקודים לא זוהו (מק"ט: ${[...new Set(unmapped.map(u=>u.makam))].join(', ')}) — לא ייכללו. ניתן להוסיפם ידנית.</p>`:''}`;
   const ov=document.createElement('div');
@@ -541,7 +544,8 @@ function showGbPreview(agg, unmapped){
   ov.onclick=e=>{ if(e.target===ov) close(); };
 }
 function applyGbImport(agg){
-  gbPriced().forEach((p,i)=>{ const el=$('#gbq-'+i); if(el) el.value = agg[p.product]!=null ? agg[p.product] : ''; });
+  _gbImportSizes={}; Object.entries(agg).forEach(([p,v])=>_gbImportSizes[p]=v.sizes);
+  gbPriced().forEach((p,i)=>{ const el=$('#gbq-'+i); if(el) el.value = agg[p.product]!=null ? agg[p.product].q : ''; });
   gbCalc();
   toast('הייבוא הוזן במחשבון ✔');
 }
@@ -552,7 +556,10 @@ function gbCalc(){
   priced.forEach((p,i)=>{
     const q=+($('#gbq-'+i)?.value||0);
     const s=q*p.price; total+=s; units+=q;
-    if(q){ items.push({p:p.product, q, sp:p.price, cp:p.cost===''?null:p.cost});
+    if(q){ const item={p:p.product, q, sp:p.price, cp:p.cost===''?null:p.cost};
+      const isz=_gbImportSizes && _gbImportSizes[p.product];  // צרף מידות מהייבוא אם הכמות תואמת
+      if(isz && Object.values(isz).reduce((a,b)=>a+b,0)===q) item.sizes=isz;
+      items.push(item);
       if(p.cost==='') costMissing=true; else cost+=q*p.cost; }
     const el=$('#gbs-'+i); if(el) el.textContent = q? fmtM(s):'';
   });
@@ -600,19 +607,29 @@ function viewList(){
     <button class="chip ${!typeFilter?'on':''}" onclick="typeFilter='';render()">כל הסוגים</button>
     ${TYPES.map(tp=>`<button class="chip ${typeFilter===tp?'on':''}" onclick="typeFilter='${tp}';render()">${tp}</button>`).join('')}
   </div>
+  <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <button class="btn" id="combBtn" ${_selShip.size?'':'disabled'} style="${_selShip.size?'':'opacity:.5'}" onclick="printCombinedFromSel()">🖨️ תעודה משולבת (<span id="selCount">${_selShip.size}</span>)</button>
+    ${_selShip.size?`<button class="btn sec" onclick="_selShip.clear();render()">נקה בחירה</button>`:''}
+    <span class="note">סמן משלוחים בעמודה הראשונה כדי לאחד אותם לתעודה אחת</span>
+  </div>
   <div class="twrap"><table>
-    <tr><th>תאריך</th><th>לקוח</th><th>סוג</th><th>יח'</th><th>סכום</th><th>תעודה</th><th>הערות</th><th></th></tr>
+    <tr><th></th><th>תאריך</th><th>לקוח</th><th>סוג</th><th>יח'</th><th>סכום</th><th>תעודה</th><th>הערות</th><th></th></tr>
     ${rows.map(s=>`<tr>
+      <td><input type="checkbox" ${_selShip.has(String(s.id))?'checked':''} onchange="toggleSel('${s.id}')" style="width:18px;height:18px"></td>
       <td>${fmtD(s.date)}</td><td>${esc(s.customer)}</td>
       <td><span class="tag ${tagCls(s.type)}">${esc(s.type)}</span></td>
       <td>${fmtN(s.units)}</td>
       <td class="money ${s.amount<0?'neg':''}">${fmtM(s.amount)}</td>
       <td>${esc(s.doc||'')}</td><td style="white-space:normal;max-width:220px">${esc(s.notes||'')}</td>
       <td><button class="rowbtn" onclick="printDeliveryNote('${s.id}')" title="תעודת משלוח">🖨️</button>${(s.sizes||s.items)?`<button class="rowbtn" onclick="showDetails('${s.id}')" title="פירוט מה נשלח">📋</button>`:''}<button class="rowbtn" onclick="editShip('${s.id}')">✏️</button><button class="rowbtn" onclick="delShip('${s.id}')">🗑️</button></td>
-    </tr>`).join('') || '<tr><td colspan="8" class="empty">אין משלוחים</td></tr>'}
-    <tr><td style="font-weight:900">סה"כ</td><td></td><td></td>
+    </tr>`).join('') || '<tr><td colspan="9" class="empty">אין משלוחים</td></tr>'}
+    <tr><td></td><td style="font-weight:900">סה"כ</td><td></td><td></td>
       <td style="font-weight:900">${fmtN(t.u)}</td><td class="money">${fmtM(t.m)}</td><td></td><td></td><td></td></tr>
   </table></div></div>`;
+}
+function toggleSel(id){ id=String(id); _selShip.has(id)?_selShip.delete(id):_selShip.add(id);
+  const c=$('#selCount'); if(c) c.textContent=_selShip.size;
+  const btn=$('#combBtn'); if(btn){ btn.disabled=_selShip.size<1; btn.style.opacity=_selShip.size?'1':'.5'; }
 }
 function showDetails(id){
   const s=DB.shipments.find(x=>String(x.id)===String(id));
@@ -625,9 +642,10 @@ function showDetails(id){
       <tr style="background:#fff2cc"><td colspan="4" style="text-align:left;font-weight:900">סה"כ יחידות</td><td><b>${fmtN(s.units)}</b></td></tr>
       </table></div>`;
   } else if(s.items){
-    html=`<div class="twrap"><table style="width:100%;font-size:14px"><tr><th>מוצר</th><th>כמות</th></tr>
-      ${s.items.map(it=>`<tr><td style="text-align:right">${esc(it.p)}</td><td><b>${it.q}</b></td></tr>`).join('')}
-      <tr style="background:#fff2cc"><td style="text-align:left;font-weight:900">סה"כ</td><td><b>${fmtN(s.units)}</b></td></tr>
+    const hasSz=s.items.some(it=>it.sizes && Object.keys(it.sizes).length);
+    html=`<div class="twrap"><table style="width:100%;font-size:14px"><tr><th>מוצר</th>${hasSz?'<th>מידות</th>':''}<th>כמות</th></tr>
+      ${s.items.map(it=>`<tr><td style="text-align:right">${esc(it.p)}</td>${hasSz?`<td style="font-size:11px;color:#666">${it.sizes?esc(szStr(it.sizes)):''}</td>`:''}<td><b>${it.q}</b></td></tr>`).join('')}
+      <tr style="background:#fff2cc"><td ${hasSz?'colspan="2"':''} style="text-align:left;font-weight:900">סה"כ</td><td><b>${fmtN(s.units)}</b></td></tr>
       </table></div>`;
   } else { html='<p>אין פירוט שמור למשלוח זה.</p>'; }
   uiInfo(`📋 ${esc(s.customer)} · ${fmtD(s.date)} · ${esc(s.type)}`, html);
@@ -646,23 +664,39 @@ function uiInfo(title, bodyHtml){
   document.addEventListener('keydown',function esc(e){ if(e.key==='Escape'){document.removeEventListener('keydown',esc);close();} });
 }
 function bizInfo(){ return { name: localStorage.getItem('shivuk_biz')||'', sub: localStorage.getItem('shivuk_bizsub')||'' }; }
-function printDeliveryNote(id){
-  const s=DB.shipments.find(x=>String(x.id)===String(id)); if(!s) return;
-  const b=bizInfo();
-  let rowsHtml='';
+function szStr(sizes){ // {מידה:כמות} → "34×2, 36×1"
+  return Object.entries(sizes||{}).sort((a,b)=>(parseFloat(a[0])||0)-(parseFloat(b[0])||0)).map(([s,q])=>`${s}×${q}`).join(', ');
+}
+function noteItemsTable(s){
   if(s.sizes){
-    rowsHtml=`<table><thead><tr><th>סוג</th><th>מידה</th><th>32-33</th><th>34-35</th><th>כמות</th></tr></thead><tbody>`+
+    return `<table><thead><tr><th>סוג</th><th>מידה</th><th>32-33</th><th>34-35</th><th>כמות</th></tr></thead><tbody>`+
       s.sizes.map(z=>`<tr><td>${esc(z.k||'')}</td><td>${esc(z.s)}</td><td>${z.a||''}</td><td>${z.b||''}</td><td>${(+z.a||0)+(+z.b||0)}</td></tr>`).join('')+
       `</tbody></table>`;
-  } else if(s.items){
-    rowsHtml=`<table><thead><tr><th>פריט</th><th>כמות</th></tr></thead><tbody>`+
-      s.items.map(it=>`<tr><td style="text-align:right">${esc(it.p)}</td><td>${it.q}</td></tr>`).join('')+`</tbody></table>`;
-  } else {
-    rowsHtml=`<table><thead><tr><th>תיאור</th><th>כמות</th></tr></thead><tbody><tr><td>${esc(s.type)}${s.notes?' — '+esc(s.notes):''}</td><td>${fmtN(s.units)}</td></tr></tbody></table>`;
   }
-  const docNo = s.doc || String(s.id).slice(-6);
-  const amountLine = (s.amount!==''&&s.amount!=null) ? ` &nbsp;|&nbsp; לתשלום: ${fmtM(s.amount)}` : '';
-  const html = `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>תעודת משלוח ${esc(docNo)}</title>
+  if(s.items){
+    const hasSz=s.items.some(it=>it.sizes && Object.keys(it.sizes).length);
+    return `<table><thead><tr><th>פריט</th>${hasSz?'<th>מידות</th>':''}<th>כמות</th></tr></thead><tbody>`+
+      s.items.map(it=>`<tr><td style="text-align:right">${esc(it.p)}</td>${hasSz?`<td style="font-size:12px">${it.sizes?esc(szStr(it.sizes)):''}</td>`:''}<td>${it.q}</td></tr>`).join('')+
+      `</tbody></table>`;
+  }
+  return `<table><thead><tr><th>תיאור</th><th>כמות</th></tr></thead><tbody><tr><td>${esc(s.type)}${s.notes?' — '+esc(s.notes):''}</td><td>${fmtN(s.units)}</td></tr></tbody></table>`;
+}
+function openNote(html){
+  const w=window.open('','_blank');
+  if(!w){ toast('חלון ההדפסה נחסם — יש לאשר חלונות קופצים'); return; }
+  w.document.write(html); w.document.close();
+}
+function noteHtml(list){
+  const b=bizInfo();
+  const custs=[...new Set(list.map(s=>s.customer))];
+  const dates=[...new Set(list.map(s=>fmtD(s.date)))].join(', ');
+  const docNo = list.map(s=>s.doc).filter(Boolean).join('+') || String(list[0].id).slice(-6);
+  const totalUnits = list.reduce((a,s)=>a+(+s.units||0),0);
+  const multi = list.length>1;
+  const sections = list.map(s=>`
+    ${multi?`<div class="sec">${esc(s.type)} · ${fmtD(s.date)}${s.doc?' · תעודה '+esc(s.doc):''}${s.notes?' · '+esc(s.notes):''}</div>`:''}
+    ${noteItemsTable(s)}`).join('');
+  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>תעודת משלוח ${esc(docNo)}</title>
   <style>
     *{font-family:Arial,sans-serif;box-sizing:border-box}
     body{margin:0;padding:26px;color:#111}
@@ -672,10 +706,11 @@ function printDeliveryNote(id){
     .title{font-size:20px;font-weight:bold;margin:12px 0}
     .meta{display:flex;justify-content:space-between;font-size:15px;margin-bottom:12px;flex-wrap:wrap;gap:8px}
     .meta b{color:#1f4e78}
+    .sec{margin:16px 0 4px;font-weight:bold;font-size:15px;color:#1f4e78;background:#eef3f9;padding:6px 10px;border-radius:5px}
     table{width:100%;border-collapse:collapse;margin-top:6px}
     th,td{border:1px solid #999;padding:7px 9px;text-align:center;font-size:14px}
     th{background:#e9eef5;color:#1f4e78}
-    .total{margin-top:14px;font-size:17px;font-weight:bold;text-align:left;background:#fff6da;padding:8px 12px;border-radius:6px;display:inline-block;float:left}
+    .total{margin-top:16px;font-size:17px;font-weight:bold;text-align:left;background:#fff6da;padding:8px 12px;border-radius:6px;display:inline-block;float:left}
     .sign{display:flex;justify-content:space-between;margin-top:70px;font-size:14px;clear:both}
     .sign div{border-top:1px solid #333;padding-top:6px;width:40%;text-align:center;color:#555}
     .noprint{text-align:center;margin-bottom:14px}
@@ -685,14 +720,23 @@ function printDeliveryNote(id){
   <div class="noprint"><button onclick="window.print()">🖨️ הדפסה</button></div>
   <div class="hdr"><h1>${esc(b.name||'תעודת משלוח')}</h1>${b.sub?`<div class="sub">${esc(b.sub)}</div>`:''}</div>
   <div class="title">תעודת משלוח מס׳ ${esc(docNo)}</div>
-  <div class="meta"><div>לכבוד: <b>${esc(s.customer)}</b></div><div>תאריך: <b>${fmtD(s.date)}</b></div><div>סוג: <b>${esc(s.type)}</b></div></div>
-  ${rowsHtml}
-  <div class="total">סה"כ יחידות: ${fmtN(s.units)}${amountLine}</div>
+  <div class="meta"><div>לכבוד: <b>${esc(custs.join(', '))}</b></div><div>תאריך: <b>${dates}</b></div>${multi?'':`<div>סוג: <b>${esc(list[0].type)}</b></div>`}</div>
+  ${sections}
+  <div class="total">סה"כ יחידות: ${fmtN(totalUnits)}</div>
   <div class="sign"><div>חתימת המוסר</div><div>חתימת המקבל</div></div>
   </body></html>`;
-  const w=window.open('','_blank');
-  if(!w){ toast('חלון ההדפסה נחסם — יש לאשר חלונות קופצים'); return; }
-  w.document.write(html); w.document.close();
+}
+function printDeliveryNote(id){
+  const s=DB.shipments.find(x=>String(x.id)===String(id)); if(!s) return;
+  openNote(noteHtml([s]));
+}
+async function printCombinedFromSel(){
+  const list=[..._selShip].map(id=>DB.shipments.find(s=>String(s.id)===id)).filter(Boolean);
+  if(!list.length){ toast('לא נבחרו משלוחים'); return; }
+  const custs=[...new Set(list.map(s=>s.customer))];
+  if(custs.length>1 && !await uiConfirm('נבחרו משלוחים ל<b>כמה לקוחות שונים</b>.<br>להפיק תעודה אחת בכל זאת?','המשך',false)) return;
+  list.sort((a,b)=> String(a.date).localeCompare(String(b.date)));
+  openNote(noteHtml(list));
 }
 function editShip(id){ editId=id; nav('add'); }
 async function delShip(id){
