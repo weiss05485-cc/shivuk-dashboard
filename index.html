@@ -116,7 +116,7 @@ const APP_PW_HASH = '7336d9ead196fe8ac03a3c003144eea8d119040dca54285735074793d40
 // כתובת ה-Apps Script מוצפנת עם הסיסמה — נפתחת אוטומטית בכניסה, בלי הגדרה ידנית בכל מכשיר
 const GS_ENC = 'aa4f5102ed5d188f6541cf4e2c81eecb883d877d8829811cdbb802935ef4f0943bff0d010f46f7fe8e555018e64f528f9b365b2b42fe2f6c4a2f2b1eff957f0c4e53ef294b2485670e4195564eba309621b78c1f1d32c3bc2b9bd64836445dc2c8a415e42a0f3ed383c8fbc37017c3254e31';
 let GS_URL = '';                              // כתובת ה-Apps Script — מוגדרת במסך הגדרות
-const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים', SHEET_EXP = 'הוצאות';
+const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים', SHEET_EXP = 'הוצאות', SHEET_SUP = 'ספק_GB';
 const PAY_METHODS = ['מזומן','העברה בנקאית',"צ'ק",'אחר'];
 const EXP_CATS = ['משלוח','אריזה','נסיעות','עמלות','אחר'];
 // מידות ברכסוני — כמו באקסלים (רגיל 12-20 + מידות צוואר 14.5-20), עמודות 32-33 / 34-35
@@ -135,7 +135,7 @@ const CUSTOMERS_DEFAULT = [];   // הלקוחות נטענים מהנתונים 
 const TYPES = ['ברכסוני','העברת GB','חזרה','אחר'];
 
 /* ================= STATE ================= */
-const DB = { shipments:[], prices:[], payments:[], expenses:[] };
+const DB = { shipments:[], prices:[], payments:[], expenses:[], supplierPays:[] };
 let page = 'home', editId = null, editPayId = null, editPriceId = null, custFilter = '', typeFilter = '';
 let _gbItems = null; // שורות המוצרים מהמחשבון (נשמרות על המשלוח לחישוב רווח לפי מוצר)
 let _brxSizes = null; // פירוט מידות ברכסוני של המשלוח הנוכחי
@@ -168,6 +168,10 @@ function fmtD(d){ d=String(stripApos(d)).slice(0,10); const p=d.split('-'); retu
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); DB.payments.forEach(p=>p.customer&&set.add(p.customer)); return [...set]; }
 function paidOf(c){ return DB.payments.filter(p=>!c||p.customer===c).reduce((a,p)=>a+(+p.amount||0),0); }
+// צד הספק: עלות כל הסחורה = מה שחייבים ל-GB; פחות מה ששולם ל-GB = היתרה
+function goodsCost(){ return DB.shipments.reduce((a,s)=>{ const c=shipCost(s); return a+(c!=null?c:0); },0); }
+function paidToGb(){ return DB.supplierPays.reduce((a,p)=>a+(+p.amount||0),0); }
+function gbBalance(){ return goodsCost()-paidToGb(); }
 // שורת מחירון ברכסוני המתאימה ללקוח (למשל "ברכסוני גוטסמן" → כל לקוח שמכיל "גוטסמן")
 function brxPriceRow(customer){
   const c=String(customer||'');
@@ -203,11 +207,12 @@ async function loadAll(){
   if(!gsUrl()){ setSync('nocfg'); if(page==='home') nav('settings'); return; }
   setSync('load');
   try{
-    const [ships, prices, pays, exps] = await Promise.all([
+    const [ships, prices, pays, exps, sups] = await Promise.all([
       apiGet({action:'getTable', sheet:SHEET_SHIP}),
       apiGet({action:'getTable', sheet:SHEET_PRICE}),
       apiGet({action:'getTable', sheet:SHEET_PAY}),
       apiGet({action:'getTable', sheet:SHEET_EXP}),
+      apiGet({action:'getTable', sheet:SHEET_SUP}),
     ]);
     DB.shipments = (ships.rows||[]).map(r=>({ ...r, date:stripApos(r.date), units:+r.units||0,
       amount:(r.amount===''||r.amount==null)?'':+r.amount,
@@ -218,9 +223,11 @@ async function loadAll(){
       cost:(r.cost===''||r.cost==null)?'':+r.cost }));
     DB.payments = (pays.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
     DB.expenses = (exps.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
+    DB.supplierPays = (sups.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
     DB.shipments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     DB.payments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     DB.expenses.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
+    DB.supplierPays.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     setSync('ok'); render();
   }catch(e){ console.error(e); setSync('err'); toast('שגיאה בטעינה — בדוק את כתובת ה-Apps Script בהגדרות'); }
 }
@@ -303,7 +310,7 @@ async function doLogin(){
 function boot(){ $('#login').style.display='none'; renderNav(); render(); loadAll(); }
 
 /* ================= NAV ================= */
-const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['pay','💰 תשלומים'], ['profit','📈 רווחים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
+const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['pay','💰 תשלומים'], ['supplier','🏭 ספק GB'], ['profit','📈 רווחים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
 function renderNav(){
   $('#nav').innerHTML = PAGES.map(([id,l])=>`<button class="${page===id?'on':''}" onclick="nav('${id}')">${l}</button>`).join('');
 }
@@ -316,6 +323,7 @@ function render(){
   else if(page==='add') m.innerHTML = viewAdd();
   else if(page==='list') m.innerHTML = viewList();
   else if(page==='pay') m.innerHTML = viewPay();
+  else if(page==='supplier') m.innerHTML = viewSupplier();
   else if(page==='profit') m.innerHTML = viewProfit();
   else if(page==='prices') m.innerHTML = viewPrices();
   else if(page==='settings') m.innerHTML = viewSettings();
@@ -357,7 +365,8 @@ function viewHome(){
     <div class="kpi"><div class="lbl">העברות GB (נטו)</div><div class="val">${fmtM(gb.m)}</div></div>
     <div class="kpi"><div class="lbl">סה"כ יחידות</div><div class="val">${fmtN(all.u)}</div></div>
     <div class="kpi"><div class="lbl">שולם</div><div class="val" style="color:var(--green)">${fmtM(paid)}</div></div>
-    <div class="kpi"><div class="lbl">חוב פתוח</div><div class="val" style="color:${all.m-paid>0?'var(--red)':'var(--green)'}">${fmtM(all.m-paid)}</div></div>
+    <div class="kpi"><div class="lbl">חוב פתוח (לקוחות)</div><div class="val" style="color:${all.m-paid>0?'var(--red)':'var(--green)'}">${fmtM(all.m-paid)}</div></div>
+    <div class="kpi"><div class="lbl">חוב ל-GB (ספק) 🏭</div><div class="val" style="color:${gbBalance()>0?'var(--red)':'var(--green)'}">${fmtM(gbBalance())}</div></div>
     <div class="kpi"><div class="lbl">רווח נקי 📈</div><div class="val" style="color:${profitData().net>=0?'var(--green)':'var(--red)'}">${fmtM(profitData().net)}</div></div>
   </div>
   <div class="custcards">${custRows}</div>
@@ -807,6 +816,51 @@ async function delPay(id){
   const x=DB.payments.find(p=>String(p.id)===String(id));
   if(!await uiConfirm(`למחוק תשלום של <b>${fmtM(x.amount)}</b> מ-${esc(x.customer)}?`)) return;
   try{ await deleteRow(SHEET_PAY,id); toast('נמחק'); await loadAll(); }
+  catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
+}
+
+/* ---------- ספק GB (חוב על סחורה + תשלומים לספק) ---------- */
+function viewSupplier(){
+  const owed=goodsCost(), paid=paidToGb(), bal=gbBalance();
+  const today=new Date().toISOString().slice(0,10);
+  const noCost=DB.shipments.filter(s=>shipCost(s)==null && s.amount!=='' && s.amount!==0).length;
+  return `
+  <div class="kpis">
+    <div class="kpi"><div class="lbl">עלות הסחורה (חוב ל-GB)</div><div class="val">${fmtM(owed)}</div></div>
+    <div class="kpi"><div class="lbl">שולם ל-GB</div><div class="val" style="color:var(--green)">${fmtM(paid)}</div></div>
+    <div class="kpi"><div class="lbl">יתרה לתשלום ל-GB</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtM(bal)}</div></div>
+  </div>
+  <p class="note" style="margin:-6px 0 14px">"עלות הסחורה" = סך העלויות שהזנת על המשלוחים — זה מה שאתה חייב ל-GB עבור הסחורה.${noCost?` ⚠️ ${noCost} משלוחים בלי עלות — החוב האמיתי גבוה יותר.`:''}</p>
+
+  <div class="card"><h2>💵 תשלום ל-GB</h2>
+  <div class="frow">
+    <div><label>תאריך</label><input type="date" id="sp-date" value="${today}"></div>
+    <div><label>סכום (₪)</label><input type="number" id="sp-amount"></div>
+    <div><label>אופן תשלום</label><select id="sp-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join('')}</select></div>
+    <div><label>הערות</label><input id="sp-notes"></div>
+  </div>
+  <button class="btn" onclick="submitSupplierPay()">💾 שמור תשלום ל-GB</button></div>
+
+  <div class="card"><h2>📜 היסטוריית תשלומים ל-GB (${DB.supplierPays.length})</h2>
+  <div class="twrap"><table><tr><th>תאריך</th><th>סכום</th><th>אופן</th><th>הערות</th><th></th></tr>
+  ${DB.supplierPays.map(x=>`<tr><td>${fmtD(x.date)}</td><td class="money">${fmtM(x.amount)}</td>
+    <td>${esc(x.method||'')}</td><td style="white-space:normal;max-width:240px">${esc(x.notes||'')}</td>
+    <td><button class="rowbtn" onclick="delSupplierPay('${x.id}')">🗑️</button></td></tr>`).join('')
+    || '<tr><td colspan="5" class="empty">עדיין לא נרשמו תשלומים ל-GB</td></tr>'}
+  </table></div></div>`;
+}
+async function submitSupplierPay(){
+  const date=$('#sp-date').value, amount=$('#sp-amount').value;
+  if(!date||amount===''){ toast('חסר תאריך או סכום'); return; }
+  try{
+    await saveRow(SHEET_SUP,{ id:Date.now(), date:"'"+date, amount:+amount, method:$('#sp-method').value, notes:$('#sp-notes').value.trim() });
+    toast('התשלום ל-GB נשמר ✔'); await loadAll(); nav('supplier');
+  }catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
+}
+async function delSupplierPay(id){
+  const x=DB.supplierPays.find(p=>String(p.id)===String(id));
+  if(!await uiConfirm(`למחוק תשלום ל-GB של <b>${fmtM(x.amount)}</b>?`)) return;
+  try{ await deleteRow(SHEET_SUP,id); toast('נמחק'); await loadAll(); }
   catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
 }
 
