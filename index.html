@@ -168,8 +168,9 @@ function fmtD(d){ d=String(stripApos(d)).slice(0,10); const p=d.split('-'); retu
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); DB.payments.forEach(p=>p.customer&&set.add(p.customer)); return [...set]; }
 function paidOf(c){ return DB.payments.filter(p=>!c||p.customer===c).reduce((a,p)=>a+(+p.amount||0),0); }
-// צד הספק: עלות כל הסחורה = מה שחייבים ל-GB; פחות מה ששולם ל-GB = היתרה
-function goodsCost(){ return DB.shipments.reduce((a,s)=>{ const c=shipCost(s); return a+(c!=null?c:0); },0); }
+// צד הספק GB: עלות סחורת ה-GB בלבד (העברות GB + חזרות) — הברכסוני מספק אחר ולא נכלל
+function isGbGoods(s){ return s.type==='העברת GB' || s.type==='חזרה'; }
+function goodsCost(){ return DB.shipments.reduce((a,s)=>{ if(!isGbGoods(s)) return a; const c=shipCost(s); return a+(c!=null?c:0); },0); }
 function paidToGb(){ return DB.supplierPays.reduce((a,p)=>a+(+p.amount||0),0); }
 function gbBalance(){ return goodsCost()-paidToGb(); }
 // שורת מחירון ברכסוני המתאימה ללקוח (למשל "ברכסוני גוטסמן" → כל לקוח שמכיל "גוטסמן")
@@ -823,14 +824,14 @@ async function delPay(id){
 function viewSupplier(){
   const owed=goodsCost(), paid=paidToGb(), bal=gbBalance();
   const today=new Date().toISOString().slice(0,10);
-  const noCost=DB.shipments.filter(s=>shipCost(s)==null && s.amount!=='' && s.amount!==0).length;
+  const noCost=DB.shipments.filter(s=>isGbGoods(s) && shipCost(s)==null && s.amount!=='' && s.amount!==0).length;
   return `
   <div class="kpis">
-    <div class="kpi"><div class="lbl">עלות הסחורה (חוב ל-GB)</div><div class="val">${fmtM(owed)}</div></div>
+    <div class="kpi"><div class="lbl">עלות סחורת GB (חוב)</div><div class="val">${fmtM(owed)}</div></div>
     <div class="kpi"><div class="lbl">שולם ל-GB</div><div class="val" style="color:var(--green)">${fmtM(paid)}</div></div>
     <div class="kpi"><div class="lbl">יתרה לתשלום ל-GB</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtM(bal)}</div></div>
   </div>
-  <p class="note" style="margin:-6px 0 14px">"עלות הסחורה" = סך העלויות שהזנת על המשלוחים — זה מה שאתה חייב ל-GB עבור הסחורה.${noCost?` ⚠️ ${noCost} משלוחים בלי עלות — החוב האמיתי גבוה יותר.`:''}</p>
+  <p class="note" style="margin:-6px 0 14px">כולל <b>רק</b> סחורת GB (העברות GB + חזרות) — הברכסוני מספק אחר ואינו נכלל כאן. זו עלות הסחורה שקיבלת מ-GB = מה שאתה חייב להם.${noCost?` ⚠️ ${noCost} משלוחי GB בלי עלות — החוב האמיתי גבוה יותר.`:''}</p>
 
   <div class="card"><h2>💵 תשלום ל-GB</h2>
   <div class="frow">
