@@ -175,10 +175,11 @@ function paidToGb(){ return DB.supplierPays.reduce((a,p)=>a+(+p.amount||0),0); }
 function gbBalance(){ return goodsCost()-paidToGb(); }
 // שורת מחירון ברכסוני המתאימה ללקוח (למשל "ברכסוני גוטסמן" → כל לקוח שמכיל "גוטסמן")
 function brxPriceRow(customer){
-  const c=String(customer||'');
-  return DB.prices.find(p=>{ const n=String(p.product); if(!n.includes('ברכסוני')) return false;
-    const kw=n.replace(/ברכסוני/g,'').trim(); return kw && (c.includes(kw)||kw.includes(c)); })
-    || DB.prices.find(p=>String(p.product).trim()==='ברכסוני'); // נפילה חזרה לשורת ברכסוני יחידה
+  const c=String(customer||'').trim();
+  if(c){ const m=DB.prices.find(p=>{ const n=String(p.product); if(!n.includes('ברכסוני')) return false;
+    const kw=n.replace(/ברכסוני/g,'').trim(); return kw && (c.includes(kw)||kw.includes(c)); });
+    if(m) return m; }
+  return DB.prices.find(p=>String(p.product).trim()==='ברכסוני'); // נפילה חזרה לשורת ברכסוני יחידה
 }
 // עלות משלוח: עלות מפורשת אם קיימת, אחרת גזורה מהמחירון (ברכסוני = כמות × עלות ליח'). null = לא ידוע
 function shipCost(s){
@@ -432,20 +433,21 @@ function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return;
   if(t==='ברכסוני') brxCalc();
   autoCost(); }
 function gbCalcInit(){ _gbItems=null; _brxSizes=null; _gbImportSizes=null; gbCalcToggle(); }
-function autoCost(){ // עלות אוטומטית לברכסוני לפי המחירון של הלקוח (כמות × עלות ליחידה)
-  const c=$('#f-cost'); if(!c || ($('#f-type')?.value)!=='ברכסוני') return;
-  if(c.value!=='' && c.dataset.auto!=='1') return; // לא דורסים ערך ידני
-  const p=brxPriceRow($('#f-cust')?.value||'');
-  const u=+($('#f-units')?.value||0);
-  if(p && p.cost!=='' && u){ c.value=u*p.cost; c.dataset.auto='1'; }
-}
+function autoCost(){ if(($('#f-type')?.value)==='ברכסוני') brxCalc(); }
+function brxCostFallback(){ return DB.prices.find(x=>String(x.product).includes('ברכסוני') && x.cost!==''); }
 function gbPriced(){ return DB.prices.filter(p=>p.price!=='' && !String(p.product).includes('ברכסוני')); }
 // טבלת מידות ברכסוני — כמו האקסל
 function brxSizeHtml(){
   const s = editId ? DB.shipments.find(x=>String(x.id)===String(editId)) : null;
   const saved = {}; if(s?.sizes) s.sizes.forEach(z=>saved[z.k+'|'+z.s]={a:z.a,b:z.b});
+  const cust = ($('#f-cust')?.value) || s?.customer || '';
+  const pr = brxPriceRow(cust);
+  const prefill = pr && pr.price!=='' ? pr.price : (s && s.units ? Math.round((s.amount||0)/s.units*100)/100 : '');
   return `<div class="gbcalc"><b style="font-size:14px">📏 טבלת מידות — הזן כמה בכל מידה, הסה"כ מחושב לבד</b>
-    <div class="twrap" style="margin-top:10px"><table style="font-size:13px">
+    <div style="margin:10px 0"><label style="display:inline">מחיר מכירה ליח' (₪):</label>
+      <input type="number" id="bx-price" value="${prefill}" oninput="this.dataset.man='1';brxCalc()" style="width:110px;display:inline-block;margin-inline-start:6px">
+      <span class="note">${pr?'הגיע מהמחירון':'לקוח חדש — הזן מחיר, ואשאל אם לזכור אותו'}</span></div>
+    <div class="twrap" style="margin-top:6px"><table style="font-size:13px">
     <tr><th>סוג</th><th>מידה</th><th>32-33</th><th>34-35</th><th>סה"כ</th></tr>
     ${BRX_SIZES.map((r,i)=>{ const v=saved[r[0]+'|'+r[1]]||{};
       return `<tr><td>${r[0]||''}</td><td><b>${r[1]}</b></td>
@@ -456,6 +458,7 @@ function brxSizeHtml(){
     <div style="text-align:left;font-weight:900;color:var(--blue);margin-top:6px" id="bx-total"></div></div>`;
 }
 function brxCalc(){
+  if(($('#f-type')?.value)!=='ברכסוני') return;
   let units=0; const sizes=[];
   BRX_SIZES.forEach((r,i)=>{
     const a=+($('#bx-a-'+i)?.value||0), b=+($('#bx-b-'+i)?.value||0), t=a+b;
@@ -464,13 +467,18 @@ function brxCalc(){
   });
   const el=$('#bx-total'); if(el) el.textContent = units? `סה"כ: ${fmtN(units)} יח'` : '';
   _brxSizes = sizes.length ? sizes : null;
-  if(units){
-    const u=$('#f-units'); if(u){ u.value=units; }
-    const p=brxPriceRow($('#f-cust')?.value||'');
-    const am=$('#f-amount');
-    if(p && p.price!=='' && am && (am.value==='' || am.dataset.auto==='1')){ am.value=units*p.price; am.dataset.auto='1'; }
-    autoCost();
-  }
+  const u=$('#f-units'); if(u) u.value = units||'';
+  const cust=$('#f-cust')?.value||'', row=brxPriceRow(cust);
+  // רענון מחיר מכירה ליח' לפי הלקוח (אלא אם הוזן ידנית)
+  const bp=$('#bx-price');
+  if(bp && bp.dataset.man!=='1' && row && row.price!=='') bp.value=row.price;
+  const price=+((bp&&bp.value)||0);
+  const am=$('#f-amount');
+  if(units && price && am && (am.value==='' || am.dataset.auto==='1')){ am.value=units*price; am.dataset.auto='1'; }
+  // עלות ברכסוני — אותה עלות ספק לכל הלקוחות (נפילה לשורת ברכסוני כלשהי עם עלות)
+  const costRow=(row && row.cost!=='')?row:brxCostFallback();
+  const c=$('#f-cost');
+  if(units && costRow && costRow.cost!=='' && c && (c.value==='' || c.dataset.auto==='1')){ c.value=units*costRow.cost; c.dataset.auto='1'; }
 }
 function gbCalcHtml(){
   const priced = gbPriced();
@@ -592,11 +600,21 @@ async function submitShipment(){
     items: _gbItems ? JSON.stringify(_gbItems) : (prev?.items ? JSON.stringify(prev.items) : ''),
     sizes: _brxSizes ? JSON.stringify(_brxSizes) : (type==='ברכסוני'&&prev?.sizes ? JSON.stringify(prev.sizes) : ''),
     doc:$('#f-doc').value.trim(), notes:$('#f-notes').value.trim() };
+  // לקוח ברכסוני חדש בלי מחיר במחירון — הצע לזכור את המחיר ליח' לפעם הבאה
+  const needRemember = type==='ברכסוני' && +units>0 && amount!=='' && !brxPriceRow(customer);
   try{
     const sid=rec.id, wasEdit=!!editId;
     await saveRow(SHEET_SHIP, rec);
     editId=null; _gbItems=null; _brxSizes=null;
     await loadAll();
+    if(needRemember){
+      const per=Math.round((+amount/+units)*100)/100;
+      if(await uiConfirm(`לזכור מחיר ברכסוני של <b>${fmtM(per)}</b> ליח' עבור <b>${esc(customer)}</b>?<br><span class="note">כך הסכום יתמלא אוטומטית בפעם הבאה</span>`,'💾 זכור מחיר',false)){
+        const cr=brxCostFallback();
+        await saveRow(SHEET_PRICE,{ id:Date.now(), product:'ברכסוני '+customer, price:per, cost: cr?cr.cost:'' });
+        await loadAll(); toast('המחיר נשמר במחירון ✔');
+      }
+    }
     if(await uiConfirm((wasEdit?'המשלוח עודכן':'המשלוח נשמר')+' ✔<br>להוציא תעודת משלוח?','🖨️ תעודת משלוח',false)) printDeliveryNote(sid);
     nav('list');
   }catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
