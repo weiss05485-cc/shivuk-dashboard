@@ -446,7 +446,8 @@ function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return;
 function gbCalcInit(){ _gbItems=null; _brxSizes=null; _gbImportSizes=null; gbCalcToggle(); }
 function autoCost(){ if(($('#f-type')?.value)==='ברכסוני') brxCalc(); }
 function brxCostFallback(){ return DB.prices.find(x=>String(x.product).includes('ברכסוני') && x.cost!==''); }
-function gbPriced(){ return DB.prices.filter(p=>p.price!=='' && !String(p.product).includes('ברכסוני')); }
+function curGbSupplier(){ return ($('#f-type')?.value==='טירול') ? 'טירול' : 'GB'; }
+function gbPriced(){ const sup=curGbSupplier(); return DB.prices.filter(p=>p.price!=='' && !String(p.product).includes('ברכסוני') && (p.supplier||'GB')===sup); }
 // טבלת מידות ברכסוני — כמו האקסל
 function brxSizeHtml(){
   const s = editId ? DB.shipments.find(x=>String(x.id)===String(editId)) : null;
@@ -509,7 +510,7 @@ function gbCalcHtml(type){
 function parseMakam(bc){ bc=String(bc).trim().toUpperCase(); if(bc.length<8) return null; return bc.slice(3,7).slice(2); }
 function kindToRow(kind){
   const P=DB.prices, txt=p=>String(p.product), has=(p,...k)=>k.every(x=>txt(p).includes(x)), not=(p,...k)=>k.every(x=>!txt(p).includes(x));
-  const f=fn=>P.find(p=>txt(p).includes('ברכסוני')?false:fn(p));
+  const f=fn=>P.find(p=>{ if(txt(p).includes('ברכסוני')) return false; if((p.supplier||'GB')!=='GB') return false; return fn(p); });
   switch(kind){
     case 'bek_full': return f(p=>has(p,'בעקיטשע','מלאה'));
     case 'bek_half': return f(p=>has(p,'בעקיטשע') && not(p,'מלאה'));
@@ -943,20 +944,25 @@ async function delTirolPay(id){
 /* ---------- prices ---------- */
 function viewPrices(){
   const ep = editPriceId ? DB.prices.find(x=>String(x.id)===String(editPriceId)) : null;
+  const isBrx = ep && String(ep.product).includes('ברכסוני');
   return `<div class="card"><h2>🏷️ מחירון — מכירה, עלות ורווח</h2>
-  <div class="twrap"><table><tr><th>מוצר</th><th>מחיר מכירה</th><th>עלות קנייה</th><th>רווח ליח'</th><th></th></tr>
+  <div class="twrap"><table><tr><th>מוצר</th><th>ספק</th><th>מחיר מכירה</th><th>עלות קנייה</th><th>רווח ליח'</th><th></th></tr>
   ${DB.prices.map(p=>{
     const margin = (p.price!==''&&p.cost!=='') ? p.price-p.cost : null;
+    const sup = String(p.product).includes('ברכסוני')?'טירול':(p.supplier||'GB');
     return `<tr><td style="white-space:normal">${esc(p.product)}</td>
+    <td><span class="tag ${sup==='טירול'?'p':'g'}">${sup}</span></td>
     <td>${p.price===''?'<span class="tag r">אין מחיר</span>':`<b>${fmtM(p.price)}</b>`}</td>
     <td>${p.cost===''?'<span class="tag o">לא הוזן</span>':fmtM(p.cost)}</td>
     <td>${margin==null?'—':`<b class="money ${margin<0?'neg':''}">${fmtM(margin)}</b>`}</td>
     <td><button class="rowbtn" onclick="editPrice('${p.id}')">✏️</button><button class="rowbtn" onclick="delPrice('${p.id}')">🗑️</button></td></tr>`;}).join('')
-    || '<tr><td colspan="5" class="empty">אין מוצרים במחירון</td></tr>'}
+    || '<tr><td colspan="6" class="empty">אין מוצרים במחירון</td></tr>'}
   </table></div><br>
   <h2>${ep?'✏️ עריכת מוצר':'➕ מוצר חדש'}</h2>
   <div class="frow">
     <div><label>שם המוצר</label><input id="np-name" value="${esc(ep?.product||'')}"></div>
+    <div><label>ספק</label><select id="np-sup" ${isBrx?'disabled':''}>
+      ${['GB','טירול'].map(x=>`<option ${((isBrx?'טירול':(ep?.supplier||'GB'))===x)?'selected':''}>${x}</option>`).join('')}</select></div>
     <div><label>מחיר מכירה (₪)</label><input type="number" id="np-price" value="${ep?.price??''}"></div>
     <div><label>עלות קנייה (₪)</label><input type="number" id="np-cost" value="${ep?.cost??''}"></div>
     <div style="display:flex;align-items:flex-end;gap:8px">
@@ -964,13 +970,14 @@ function viewPrices(){
       ${ep?`<button class="btn sec" onclick="editPriceId=null;render()">ביטול</button>`:''}
     </div>
   </div>
-  <p class="note">העלות משמשת לחישוב הרווחים; המחיר משמש את מחשבון ה-GB בטופס משלוח.</p></div>`;
+  <p class="note">הספק קובע באיזה בורר המוצר יופיע (העברת GB / טירול) ולאיזה חוב ספק הוא נספר. מוצרי ברכסוני תמיד טירול.</p></div>`;
 }
 async function savePriceForm(){
   const name=$('#np-name').value.trim(); if(!name){toast('חסר שם מוצר');return;}
   const price=$('#np-price').value, cost=$('#np-cost').value;
+  const sup = name.includes('ברכסוני') ? 'טירול' : ($('#np-sup')?.value||'GB');
   const base = editPriceId ? DB.prices.find(x=>String(x.id)===String(editPriceId)) : {id:Date.now()};
-  await saveRow(SHEET_PRICE,{...base, product:name, price:price===''?'':+price, cost:cost===''?'':+cost});
+  await saveRow(SHEET_PRICE,{...base, product:name, price:price===''?'':+price, cost:cost===''?'':+cost, supplier:sup});
   toast(editPriceId?'עודכן ✔':'נוסף ✔'); editPriceId=null; await loadAll();
 }
 function editPrice(id){ editPriceId=id; render(); window.scrollTo({top:0,behavior:'smooth'}); }
