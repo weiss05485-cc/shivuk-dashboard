@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>שיווק — ניהול משלוחים</title>
+<link rel="icon" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -103,7 +105,10 @@ tr:hover td{background:#f7fafd}
 
 <header>
   <div class="hrow">
-    <div><h1>📦 שיווק — ניהול משלוחים</h1><div class="sub">מכירות סיטונאיות</div></div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <img src="logo.png" onerror="this.style.display='none'" style="height:44px;background:#fff;border-radius:8px;padding:3px">
+      <div><h1>שיווק — ניהול משלוחים</h1><div class="sub">TYROL · מכירות סיטונאיות</div></div>
+    </div>
     <div id="syncState"></div>
   </div>
   <nav id="nav"></nav>
@@ -705,7 +710,8 @@ function uiInfo(title, bodyHtml){
   ov.onclick=e=>{ if(e.target===ov) close(); };
   document.addEventListener('keydown',function esc(e){ if(e.key==='Escape'){document.removeEventListener('keydown',esc);close();} });
 }
-function bizInfo(){ return { name: localStorage.getItem('shivuk_biz')||'', sub: localStorage.getItem('shivuk_bizsub')||'' }; }
+function bizInfo(){ return { name: localStorage.getItem('shivuk_biz')||'טירול', sub: localStorage.getItem('shivuk_bizsub')||'', vat: localStorage.getItem('shivuk_vat')||'038775268' }; }
+const LOGO_URL = 'https://shivuk.chasidim-center.co.il/logo.png';
 function szStr(sizes){ // {מידה:כמות} → "34×2, 36×1"
   return Object.entries(sizes||{}).sort((a,b)=>(parseFloat(a[0])||0)-(parseFloat(b[0])||0)).map(([s,q])=>`${s}×${q}`).join(', ');
 }
@@ -763,7 +769,12 @@ function noteHtml(list, wp){
     @media print{ body{padding:0} .noprint{display:none} }
   </style></head><body>
   <div class="noprint"><button onclick="window.print()">🖨️ הדפסה</button></div>
-  <div class="hdr"><h1>${esc(b.name||heading)}</h1>${b.sub?`<div class="sub">${esc(b.sub)}</div>`:''}</div>
+  <div class="hdr">
+    <img src="${LOGO_URL}" onerror="this.style.display='none'" style="max-height:95px;margin-bottom:6px">
+    ${b.name?`<h1>${esc(b.name)}</h1>`:''}
+    ${b.sub?`<div class="sub">${esc(b.sub)}</div>`:''}
+    ${b.vat?`<div class="sub">ע.מ ${esc(b.vat)}</div>`:''}
+  </div>
   <div class="title">${heading} מס׳ ${esc(docNo)}</div>
   <div class="meta"><div>לכבוד: <b>${esc(custs.join(', '))}</b></div><div>תאריך: <b>${dates}</b></div>${multi?'':`<div>סוג: <b>${esc(list[0].type)}</b></div>`}</div>
   ${sections}
@@ -1099,10 +1110,12 @@ function viewSettings(){
   const b=bizInfo();
   return `<div class="card"><h2>🖨️ פרטי העסק לתעודת משלוח</h2>
   <div class="frow">
-    <div><label>שם העסק (כותרת התעודה)</label><input id="set-biz" value="${esc(b.name)}" placeholder="לדוגמה: ברכסוני שיווק"></div>
+    <div><label>שם העסק (כותרת התעודה)</label><input id="set-biz" value="${esc(b.name)}" placeholder="לדוגמה: טירול"></div>
+    <div><label>ע.מ / עוסק מורשה</label><input id="set-vat" value="${esc(b.vat)}" placeholder="038775268"></div>
     <div><label>שורת פרטים (טלפון/כתובת — לא חובה)</label><input id="set-bizsub" value="${esc(b.sub)}" placeholder="טל׳ ... | כתובת ..."></div>
   </div>
-  <button class="btn" onclick="saveBiz()">💾 שמור פרטי עסק</button></div>
+  <button class="btn" onclick="saveBiz()">💾 שמור פרטי עסק</button>
+  <p class="note" style="margin-top:8px">הלוגו והע.מ מופיעים בכל תעודת משלוח.</p></div>
 
   <div class="card"><h2>⚙️ חיבור ומערכת</h2>
   <label>כתובת ה-Apps Script (מסתיימת ב-/exec)</label>
@@ -1114,6 +1127,7 @@ function viewSettings(){
 function saveBiz(){
   localStorage.setItem('shivuk_biz',$('#set-biz').value.trim());
   localStorage.setItem('shivuk_bizsub',$('#set-bizsub').value.trim());
+  localStorage.setItem('shivuk_vat',$('#set-vat').value.trim());
   toast('פרטי העסק נשמרו ✔');
 }
 async function saveSettings(){
