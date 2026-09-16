@@ -650,6 +650,7 @@ function viewList(){
   </div>
   <div style="margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
     <button class="btn" id="combBtn" ${_selShip.size?'':'disabled'} style="${_selShip.size?'':'opacity:.5'}" onclick="printCombinedFromSel()">🖨️ תעודה משולבת (<span id="selCount">${_selShip.size}</span>)</button>
+    <label style="display:flex;align-items:center;gap:5px;font-size:14px"><input type="checkbox" id="comb-prices" style="width:18px;height:18px">כלול מחירים ולתשלום</label>
     ${_selShip.size?`<button class="btn sec" onclick="_selShip.clear();render()">נקה בחירה</button>`:''}
     <span class="note">סמן משלוחים בעמודה הראשונה כדי לאחד אותם לתעודה אחת</span>
   </div>
@@ -662,7 +663,7 @@ function viewList(){
       <td>${fmtN(s.units)}</td>
       <td class="money ${s.amount<0?'neg':''}">${fmtM(s.amount)}</td>
       <td>${esc(s.doc||'')}</td><td style="white-space:normal;max-width:220px">${esc(s.notes||'')}</td>
-      <td><button class="rowbtn" onclick="printDeliveryNote('${s.id}')" title="תעודת משלוח">🖨️</button>${(s.sizes||s.items)?`<button class="rowbtn" onclick="showDetails('${s.id}')" title="פירוט מה נשלח">📋</button>`:''}<button class="rowbtn" onclick="editShip('${s.id}')">✏️</button><button class="rowbtn" onclick="delShip('${s.id}')">🗑️</button></td>
+      <td><button class="rowbtn" onclick="printDeliveryNote('${s.id}')" title="תעודת משלוח (בלי מחירים)">🖨️</button><button class="rowbtn" onclick="printDeliveryNote('${s.id}',true)" title="תעודה עם מחירים ולתשלום">🧾</button>${(s.sizes||s.items)?`<button class="rowbtn" onclick="showDetails('${s.id}')" title="פירוט מה נשלח">📋</button>`:''}<button class="rowbtn" onclick="editShip('${s.id}')">✏️</button><button class="rowbtn" onclick="delShip('${s.id}')">🗑️</button></td>
     </tr>`).join('') || '<tr><td colspan="9" class="empty">אין משלוחים</td></tr>'}
     <tr><td></td><td style="font-weight:900">סה"כ</td><td></td><td></td>
       <td style="font-weight:900">${fmtN(t.u)}</td><td class="money">${fmtM(t.m)}</td><td></td><td></td><td></td></tr>
@@ -708,36 +709,39 @@ function bizInfo(){ return { name: localStorage.getItem('shivuk_biz')||'', sub: 
 function szStr(sizes){ // {מידה:כמות} → "34×2, 36×1"
   return Object.entries(sizes||{}).sort((a,b)=>(parseFloat(a[0])||0)-(parseFloat(b[0])||0)).map(([s,q])=>`${s}×${q}`).join(', ');
 }
-function noteItemsTable(s){
+function noteItemsTable(s, wp){
+  const unitPrice = (s.units && s.amount!=='' && s.amount!=null) ? s.amount/s.units : null;
   if(s.sizes){
     return `<table><thead><tr><th>סוג</th><th>מידה</th><th>32-33</th><th>34-35</th><th>כמות</th></tr></thead><tbody>`+
       s.sizes.map(z=>`<tr><td>${esc(z.k||'')}</td><td>${esc(z.s)}</td><td>${z.a||''}</td><td>${z.b||''}</td><td>${(+z.a||0)+(+z.b||0)}</td></tr>`).join('')+
-      `</tbody></table>`;
+      `</tbody></table>${wp&&unitPrice!=null?`<div style="margin-top:4px;font-size:13px">מחיר ליח': <b>${fmtM(unitPrice)}</b> · סה"כ לשורה: <b>${fmtM(s.amount)}</b></div>`:''}`;
   }
   if(s.items){
     const hasSz=s.items.some(it=>it.sizes && Object.keys(it.sizes).length);
-    return `<table><thead><tr><th>פריט</th>${hasSz?'<th>מידות</th>':''}<th>כמות</th></tr></thead><tbody>`+
-      s.items.map(it=>`<tr><td style="text-align:right">${esc(it.p)}</td>${hasSz?`<td style="font-size:12px">${it.sizes?esc(szStr(it.sizes)):''}</td>`:''}<td>${it.q}</td></tr>`).join('')+
+    return `<table><thead><tr><th>פריט</th>${hasSz?'<th>מידות</th>':''}<th>כמות</th>${wp?'<th>מחיר יח\'</th><th>סה"כ</th>':''}</tr></thead><tbody>`+
+      s.items.map(it=>`<tr><td style="text-align:right">${esc(it.p)}</td>${hasSz?`<td style="font-size:12px">${it.sizes?esc(szStr(it.sizes)):''}</td>`:''}<td>${it.q}</td>${wp?`<td>${fmtM(it.sp)}</td><td>${fmtM((+it.q||0)*(+it.sp||0))}</td>`:''}</tr>`).join('')+
       `</tbody></table>`;
   }
-  return `<table><thead><tr><th>תיאור</th><th>כמות</th></tr></thead><tbody><tr><td>${esc(s.type)}${s.notes?' — '+esc(s.notes):''}</td><td>${fmtN(s.units)}</td></tr></tbody></table>`;
+  return `<table><thead><tr><th>תיאור</th><th>כמות</th>${wp?'<th>סה"כ</th>':''}</tr></thead><tbody><tr><td>${esc(s.type)}${s.notes?' — '+esc(s.notes):''}</td><td>${fmtN(s.units)}</td>${wp?`<td>${fmtM(s.amount)}</td>`:''}</tr></tbody></table>`;
 }
 function openNote(html){
   const w=window.open('','_blank');
   if(!w){ toast('חלון ההדפסה נחסם — יש לאשר חלונות קופצים'); return; }
   w.document.write(html); w.document.close();
 }
-function noteHtml(list){
+function noteHtml(list, wp){
   const b=bizInfo();
   const custs=[...new Set(list.map(s=>s.customer))];
   const dates=[...new Set(list.map(s=>fmtD(s.date)))].join(', ');
   const docNo = list.map(s=>s.doc).filter(Boolean).join('+') || String(list[0].id).slice(-6);
   const totalUnits = list.reduce((a,s)=>a+(+s.units||0),0);
+  const totalAmount = list.reduce((a,s)=>a+(s.amount!==''&&s.amount!=null?+s.amount:0),0);
   const multi = list.length>1;
   const sections = list.map(s=>`
     ${multi?`<div class="sec">${esc(s.type)} · ${fmtD(s.date)}${s.doc?' · תעודה '+esc(s.doc):''}${s.notes?' · '+esc(s.notes):''}</div>`:''}
-    ${noteItemsTable(s)}`).join('');
-  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>תעודת משלוח ${esc(docNo)}</title>
+    ${noteItemsTable(s, wp)}`).join('');
+  const heading = wp ? 'תעודת משלוח / חשבון' : 'תעודת משלוח';
+  return `<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8"><title>${heading} ${esc(docNo)}</title>
   <style>
     *{font-family:Arial,sans-serif;box-sizing:border-box}
     body{margin:0;padding:26px;color:#111}
@@ -759,17 +763,17 @@ function noteHtml(list){
     @media print{ body{padding:0} .noprint{display:none} }
   </style></head><body>
   <div class="noprint"><button onclick="window.print()">🖨️ הדפסה</button></div>
-  <div class="hdr"><h1>${esc(b.name||'תעודת משלוח')}</h1>${b.sub?`<div class="sub">${esc(b.sub)}</div>`:''}</div>
-  <div class="title">תעודת משלוח מס׳ ${esc(docNo)}</div>
+  <div class="hdr"><h1>${esc(b.name||heading)}</h1>${b.sub?`<div class="sub">${esc(b.sub)}</div>`:''}</div>
+  <div class="title">${heading} מס׳ ${esc(docNo)}</div>
   <div class="meta"><div>לכבוד: <b>${esc(custs.join(', '))}</b></div><div>תאריך: <b>${dates}</b></div>${multi?'':`<div>סוג: <b>${esc(list[0].type)}</b></div>`}</div>
   ${sections}
-  <div class="total">סה"כ יחידות: ${fmtN(totalUnits)}</div>
+  <div class="total">סה"כ יחידות: ${fmtN(totalUnits)}${wp?` &nbsp;|&nbsp; <span style="color:#1f4e78">לתשלום: ${fmtM(totalAmount)}</span>`:''}</div>
   <div class="sign"><div>חתימת המוסר</div><div>חתימת המקבל</div></div>
   </body></html>`;
 }
-function printDeliveryNote(id){
+function printDeliveryNote(id, wp){
   const s=DB.shipments.find(x=>String(x.id)===String(id)); if(!s) return;
-  openNote(noteHtml([s]));
+  openNote(noteHtml([s], wp));
 }
 async function printCombinedFromSel(){
   const list=[..._selShip].map(id=>DB.shipments.find(s=>String(s.id)===id)).filter(Boolean);
@@ -777,7 +781,8 @@ async function printCombinedFromSel(){
   const custs=[...new Set(list.map(s=>s.customer))];
   if(custs.length>1 && !await uiConfirm('נבחרו משלוחים ל<b>כמה לקוחות שונים</b>.<br>להפיק תעודה אחת בכל זאת?','המשך',false)) return;
   list.sort((a,b)=> String(a.date).localeCompare(String(b.date)));
-  openNote(noteHtml(list));
+  const wp = !!$('#comb-prices')?.checked;
+  openNote(noteHtml(list, wp));
 }
 function editShip(id){ editId=id; nav('add'); }
 async function delShip(id){
