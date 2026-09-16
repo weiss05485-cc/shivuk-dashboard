@@ -62,6 +62,7 @@ tr:hover td{background:#f7fafd}
 .tag.g{background:#e2efda;color:var(--green)}
 .tag.r{background:#fde7e7;color:var(--red)}
 .tag.o{background:#fff2cc;color:var(--gold)}
+.tag.p{background:#ece3f5;color:#6b3fa0}
 .rowbtn{border:0;background:#eef3f9;border-radius:8px;padding:5px 9px;font-size:13px;margin-inline-start:4px}
 .rowbtn:hover{background:#ddebf7}
 
@@ -116,7 +117,7 @@ const APP_PW_HASH = '7336d9ead196fe8ac03a3c003144eea8d119040dca54285735074793d40
 // כתובת ה-Apps Script מוצפנת עם הסיסמה — נפתחת אוטומטית בכניסה, בלי הגדרה ידנית בכל מכשיר
 const GS_ENC = 'aa4f5102ed5d188f6541cf4e2c81eecb883d877d8829811cdbb802935ef4f0943bff0d010f46f7fe8e555018e64f528f9b365b2b42fe2f6c4a2f2b1eff957f0c4e53ef294b2485670e4195564eba309621b78c1f1d32c3bc2b9bd64836445dc2c8a415e42a0f3ed383c8fbc37017c3254e31';
 let GS_URL = '';                              // כתובת ה-Apps Script — מוגדרת במסך הגדרות
-const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים', SHEET_EXP = 'הוצאות', SHEET_SUP = 'ספק_GB';
+const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים', SHEET_EXP = 'הוצאות', SHEET_SUP = 'ספק_GB', SHEET_SUP_T = 'ספק_טירול';
 const PAY_METHODS = ['מזומן','העברה בנקאית',"צ'ק",'אחר'];
 const EXP_CATS = ['משלוח','אריזה','נסיעות','עמלות','אחר'];
 // מידות ברכסוני — כמו באקסלים (רגיל 12-20 + מידות צוואר 14.5-20), עמודות 32-33 / 34-35
@@ -132,10 +133,10 @@ const MAKAM_KIND = {
   '01':'suit3','02':'suit3','03':'suit3','05':'suit3',
   '25':'pants','26':'pants','27':'pants' };
 const CUSTOMERS_DEFAULT = [];   // הלקוחות נטענים מהנתונים בגיליון
-const TYPES = ['ברכסוני','העברת GB','חזרה','אחר'];
+const TYPES = ['ברכסוני','העברת GB','טירול','חזרה','אחר'];
 
 /* ================= STATE ================= */
-const DB = { shipments:[], prices:[], payments:[], expenses:[], supplierPays:[] };
+const DB = { shipments:[], prices:[], payments:[], expenses:[], supplierPays:[], supplierPaysT:[] };
 let page = 'home', editId = null, editPayId = null, editPriceId = null, custFilter = '', typeFilter = '';
 let _gbItems = null; // שורות המוצרים מהמחשבון (נשמרות על המשלוח לחישוב רווח לפי מוצר)
 let _brxSizes = null; // פירוט מידות ברכסוני של המשלוח הנוכחי
@@ -168,11 +169,16 @@ function fmtD(d){ d=String(stripApos(d)).slice(0,10); const p=d.split('-'); retu
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); DB.payments.forEach(p=>p.customer&&set.add(p.customer)); return [...set]; }
 function paidOf(c){ return DB.payments.filter(p=>!c||p.customer===c).reduce((a,p)=>a+(+p.amount||0),0); }
-// צד הספק GB: עלות סחורת ה-GB בלבד (העברות GB + חזרות) — הברכסוני מספק אחר ולא נכלל
+// ספק GB: סחורת GB בלבד (העברות GB + חזרות)
 function isGbGoods(s){ return s.type==='העברת GB' || s.type==='חזרה'; }
 function goodsCost(){ return DB.shipments.reduce((a,s)=>{ if(!isGbGoods(s)) return a; const c=shipCost(s); return a+(c!=null?c:0); },0); }
 function paidToGb(){ return DB.supplierPays.reduce((a,p)=>a+(+p.amount||0),0); }
 function gbBalance(){ return goodsCost()-paidToGb(); }
+// ספק טירול: ברכסוני + מוצרי טירול
+function isTirolGoods(s){ return s.type==='ברכסוני' || s.type==='טירול'; }
+function tirolCost(){ return DB.shipments.reduce((a,s)=>{ if(!isTirolGoods(s)) return a; const c=shipCost(s); return a+(c!=null?c:0); },0); }
+function paidToTirol(){ return DB.supplierPaysT.reduce((a,p)=>a+(+p.amount||0),0); }
+function tirolBalance(){ return tirolCost()-paidToTirol(); }
 // שורת מחירון ברכסוני המתאימה ללקוח (למשל "ברכסוני גוטסמן" → כל לקוח שמכיל "גוטסמן")
 function brxPriceRow(customer){
   const c=String(customer||'').trim();
@@ -187,7 +193,7 @@ function shipCost(s){
   if(s.type==='ברכסוני'){ const p=brxPriceRow(s.customer); if(p && p.cost!=='') return s.units*p.cost; }
   return null;
 }
-function tagCls(t){ return t==='ברכסוני'?'b':t==='העברת GB'?'g':t==='חזרה'?'r':'o'; }
+function tagCls(t){ return t==='ברכסוני'?'b':t==='העברת GB'?'g':t==='טירול'?'p':t==='חזרה'?'r':'o'; }
 
 /* ================= API (Google Apps Script) ================= */
 function gsUrl(){ return localStorage.getItem('shivuk_gs') || GS_URL; }
@@ -209,12 +215,13 @@ async function loadAll(){
   if(!gsUrl()){ setSync('nocfg'); if(page==='home') nav('settings'); return; }
   setSync('load');
   try{
-    const [ships, prices, pays, exps, sups] = await Promise.all([
+    const [ships, prices, pays, exps, sups, supsT] = await Promise.all([
       apiGet({action:'getTable', sheet:SHEET_SHIP}),
       apiGet({action:'getTable', sheet:SHEET_PRICE}),
       apiGet({action:'getTable', sheet:SHEET_PAY}),
       apiGet({action:'getTable', sheet:SHEET_EXP}),
       apiGet({action:'getTable', sheet:SHEET_SUP}),
+      apiGet({action:'getTable', sheet:SHEET_SUP_T}),
     ]);
     DB.shipments = (ships.rows||[]).map(r=>({ ...r, date:stripApos(r.date), units:+r.units||0,
       amount:(r.amount===''||r.amount==null)?'':+r.amount,
@@ -226,6 +233,8 @@ async function loadAll(){
     DB.payments = (pays.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
     DB.expenses = (exps.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
     DB.supplierPays = (sups.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
+    DB.supplierPaysT = (supsT.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
+    DB.supplierPaysT.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     DB.shipments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     DB.payments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     DB.expenses.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
@@ -312,7 +321,7 @@ async function doLogin(){
 function boot(){ $('#login').style.display='none'; renderNav(); render(); loadAll(); }
 
 /* ================= NAV ================= */
-const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['pay','💰 תשלומים'], ['supplier','🏭 ספק GB'], ['profit','📈 רווחים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
+const PAGES = [ ['home','📊 סיכום'], ['add','➕ משלוח חדש'], ['list','📋 כל המשלוחים'], ['pay','💰 תשלומים'], ['supplier','🏭 ספק GB'], ['supplierT','🧵 ספק טירול'], ['profit','📈 רווחים'], ['prices','🏷️ מחירון'], ['settings','⚙️'] ];
 function renderNav(){
   $('#nav').innerHTML = PAGES.map(([id,l])=>`<button class="${page===id?'on':''}" onclick="nav('${id}')">${l}</button>`).join('');
 }
@@ -326,6 +335,7 @@ function render(){
   else if(page==='list') m.innerHTML = viewList();
   else if(page==='pay') m.innerHTML = viewPay();
   else if(page==='supplier') m.innerHTML = viewSupplier();
+  else if(page==='supplierT') m.innerHTML = viewSupplierT();
   else if(page==='profit') m.innerHTML = viewProfit();
   else if(page==='prices') m.innerHTML = viewPrices();
   else if(page==='settings') m.innerHTML = viewSettings();
@@ -369,6 +379,7 @@ function viewHome(){
     <div class="kpi"><div class="lbl">שולם</div><div class="val" style="color:var(--green)">${fmtM(paid)}</div></div>
     <div class="kpi"><div class="lbl">חוב פתוח (לקוחות)</div><div class="val" style="color:${all.m-paid>0?'var(--red)':'var(--green)'}">${fmtM(all.m-paid)}</div></div>
     <div class="kpi"><div class="lbl">חוב ל-GB (ספק) 🏭</div><div class="val" style="color:${gbBalance()>0?'var(--red)':'var(--green)'}">${fmtM(gbBalance())}</div></div>
+    <div class="kpi"><div class="lbl">חוב לטירול (ספק) 🧵</div><div class="val" style="color:${tirolBalance()>0?'var(--red)':'var(--green)'}">${fmtM(tirolBalance())}</div></div>
     <div class="kpi"><div class="lbl">רווח נקי 📈</div><div class="val" style="color:${profitData().net>=0?'var(--green)':'var(--red)'}">${fmtM(profitData().net)}</div></div>
   </div>
   <div class="custcards">${custRows}</div>
@@ -429,7 +440,7 @@ function viewAdd(){
 }
 function gbCalcToggle(){ const w=$('#gbcalc-wrap'); if(!w) return;
   const t=$('#f-type').value;
-  w.innerHTML = t==='העברת GB' ? gbCalcHtml() : t==='ברכסוני' ? brxSizeHtml() : '';
+  w.innerHTML = (t==='העברת GB'||t==='טירול') ? gbCalcHtml(t) : t==='ברכסוני' ? brxSizeHtml() : '';
   if(t==='ברכסוני') brxCalc();
   autoCost(); }
 function gbCalcInit(){ _gbItems=null; _brxSizes=null; _gbImportSizes=null; gbCalcToggle(); }
@@ -480,13 +491,14 @@ function brxCalc(){
   const c=$('#f-cost');
   if(units && costRow && costRow.cost!=='' && c && (c.value==='' || c.dataset.auto==='1')){ c.value=units*costRow.cost; c.dataset.auto='1'; }
 }
-function gbCalcHtml(){
+function gbCalcHtml(type){
   const priced = gbPriced();
   if(!priced.length) return '';
+  const isGb = type!=='טירול';
   return `<div class="gbcalc"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-    <b style="font-size:14px">🧮 מחשבון GB — הזן כמויות או ייבא קובץ ברקודים</b>
-    <label class="btn sec" style="padding:8px 14px;font-size:13px;cursor:pointer">📁 ייבוא אקסל ברקודים
-      <input type="file" accept=".xls,.xlsx,.csv" style="display:none" onchange="importGbExcel(event)"></label></div><br>
+    <b style="font-size:14px">🧮 ${isGb?'מחשבון GB — הזן כמויות או ייבא קובץ ברקודים':'בחירת מוצרים — הזן כמות מכל מוצר'}</b>
+    ${isGb?`<label class="btn sec" style="padding:8px 14px;font-size:13px;cursor:pointer">📁 ייבוא אקסל ברקודים
+      <input type="file" accept=".xls,.xlsx,.csv" style="display:none" onchange="importGbExcel(event)"></label>`:''}</div><br>
     ${priced.map((p,i)=>`<div class="gbline">
       <span style="font-size:14px">${esc(p.product)} <span class="note">(${fmtM(p.price)})</span></span>
       <input type="number" min="0" id="gbq-${i}" oninput="gbCalc()" placeholder="0">
@@ -880,6 +892,51 @@ async function delSupplierPay(id){
   const x=DB.supplierPays.find(p=>String(p.id)===String(id));
   if(!await uiConfirm(`למחוק תשלום ל-GB של <b>${fmtM(x.amount)}</b>?`)) return;
   try{ await deleteRow(SHEET_SUP,id); toast('נמחק'); await loadAll(); }
+  catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
+}
+
+/* ---------- ספק טירול (ברכסוני + מוצרי טירול) ---------- */
+function viewSupplierT(){
+  const owed=tirolCost(), paid=paidToTirol(), bal=tirolBalance();
+  const today=new Date().toISOString().slice(0,10);
+  const noCost=DB.shipments.filter(s=>isTirolGoods(s) && shipCost(s)==null && s.amount!=='' && s.amount!==0).length;
+  return `
+  <div class="kpis">
+    <div class="kpi"><div class="lbl">עלות סחורת טירול (חוב)</div><div class="val">${fmtM(owed)}</div></div>
+    <div class="kpi"><div class="lbl">שולם לטירול</div><div class="val" style="color:var(--green)">${fmtM(paid)}</div></div>
+    <div class="kpi"><div class="lbl">יתרה לתשלום לטירול</div><div class="val" style="color:${bal>0?'var(--red)':'var(--green)'}">${fmtM(bal)}</div></div>
+  </div>
+  <p class="note" style="margin:-6px 0 14px">כולל את הברכסוני + כל מוצרי טירול. זו עלות הסחורה שקיבלת מטירול = מה שאתה חייב להם.${noCost?` ⚠️ ${noCost} משלוחי טירול בלי עלות — החוב האמיתי גבוה יותר.`:''}</p>
+
+  <div class="card"><h2>💵 תשלום לטירול</h2>
+  <div class="frow">
+    <div><label>תאריך</label><input type="date" id="spt-date" value="${today}"></div>
+    <div><label>סכום (₪)</label><input type="number" id="spt-amount"></div>
+    <div><label>אופן תשלום</label><select id="spt-method">${PAY_METHODS.map(m=>`<option>${m}</option>`).join('')}</select></div>
+    <div><label>הערות</label><input id="spt-notes"></div>
+  </div>
+  <button class="btn" onclick="submitTirolPay()">💾 שמור תשלום לטירול</button></div>
+
+  <div class="card"><h2>📜 היסטוריית תשלומים לטירול (${DB.supplierPaysT.length})</h2>
+  <div class="twrap"><table><tr><th>תאריך</th><th>סכום</th><th>אופן</th><th>הערות</th><th></th></tr>
+  ${DB.supplierPaysT.map(x=>`<tr><td>${fmtD(x.date)}</td><td class="money">${fmtM(x.amount)}</td>
+    <td>${esc(x.method||'')}</td><td style="white-space:normal;max-width:240px">${esc(x.notes||'')}</td>
+    <td><button class="rowbtn" onclick="delTirolPay('${x.id}')">🗑️</button></td></tr>`).join('')
+    || '<tr><td colspan="5" class="empty">עדיין לא נרשמו תשלומים לטירול</td></tr>'}
+  </table></div></div>`;
+}
+async function submitTirolPay(){
+  const date=$('#spt-date').value, amount=$('#spt-amount').value;
+  if(!date||amount===''){ toast('חסר תאריך או סכום'); return; }
+  try{
+    await saveRow(SHEET_SUP_T,{ id:Date.now(), date:"'"+date, amount:+amount, method:$('#spt-method').value, notes:$('#spt-notes').value.trim() });
+    toast('התשלום לטירול נשמר ✔'); await loadAll(); nav('supplierT');
+  }catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
+}
+async function delTirolPay(id){
+  const x=DB.supplierPaysT.find(p=>String(p.id)===String(id));
+  if(!await uiConfirm(`למחוק תשלום לטירול של <b>${fmtM(x.amount)}</b>?`)) return;
+  try{ await deleteRow(SHEET_SUP_T,id); toast('נמחק'); await loadAll(); }
   catch(e){ setSync('err'); toast('שגיאה במחיקה'); }
 }
 
