@@ -23,6 +23,7 @@ function handle(e) {
     else if (action === 'saveRow') out = saveRow(p.sheet, JSON.parse(p.data));
     else if (action === 'saveRows') out = saveRows(p.sheet, JSON.parse(p.data), p.clear === '1');
     else if (action === 'deleteRow') out = deleteRow(p.sheet, p.id);
+    else if (action === 'ezDoc') out = ezDoc(p);
     else out = { ok: false, error: 'unknown action' };
   } catch (err) {
     out = { ok: false, error: String(err) };
@@ -142,4 +143,45 @@ function deleteRow(name, id) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * EZcount — הפקת מסמך (חשבונית/קבלה). המפתח והמייל נשמרים ב-Script Properties בלבד:
+ *   EZ_APIKEY = מפתח ה-API של EZcount
+ *   EZ_EMAIL  = המייל שאיתו נרשמת ל-EZcount
+ *   EZ_DEMO   = 1 לבדיקה על סביבת הדמו (createDoc על demo.ezcount.co.il), ריק/0 = אמיתי
+ */
+function ezDoc(p) {
+  var pr = PropertiesService.getScriptProperties();
+  var key = pr.getProperty('EZ_APIKEY'), email = pr.getProperty('EZ_EMAIL');
+  if (!key || !email) return { ok: false, error: 'חסרים פרטי EZcount ב-Script Properties (EZ_APIKEY, EZ_EMAIL)' };
+  var demo = pr.getProperty('EZ_DEMO') === '1';
+  var amount = Number(p.amount) || 0;
+  var body = {
+    api_key: key,
+    developer_email: email,
+    type: Number(p.type) || 320,           // 320 חשבונית מס-קבלה, 400 קבלה, 305 חשבונית מס
+    customer_name: p.customer_name || 'לקוח',
+    item: [{ details: p.details || 'תשלום עבור סחורה', price: amount, amount: 1, vat_type: 'INC' }],
+    payment: [{ payment_type: Number(p.payment_type) || 1, payment_sum: amount }],
+    price_total: amount,
+    email_to_client: false
+  };
+  if (p.customer_email) body.customer_email = p.customer_email;
+  if (p.customer_taxid) body.customer_business_number = p.customer_taxid;
+  if (Number(p.type) === 400) delete body.item;  // קבלה בלבד — אין שורות מוצר
+  var base = demo ? 'https://demo.ezcount.co.il' : 'https://api.ezcount.co.il';
+  var res = UrlFetchApp.fetch(base + '/api/createDoc', {
+    method: 'post', contentType: 'application/json',
+    payload: JSON.stringify(body), muteHttpExceptions: true
+  });
+  var j;
+  try { j = JSON.parse(res.getContentText()); } catch (e) { return { ok: false, error: 'EZcount: ' + res.getContentText().slice(0, 300) }; }
+  if (!j.success) return { ok: false, error: (j.errMsg || j.error || 'EZcount error'), raw: j };
+  return {
+    ok: true, demo: demo,
+    doc_number: j.doc_number || j.docNumber || '',
+    doc_url: j.doc_url || j.pdf_link || j.pdf_link_original || j.doc_url_for_email || '',
+    raw: j
+  };
 }

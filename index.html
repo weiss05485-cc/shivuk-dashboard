@@ -840,13 +840,28 @@ function viewPay(){
   </table></div></div>
 
   <div class="card"><h2>📜 היסטוריית תשלומים (${DB.payments.length})</h2>
-  <div class="twrap"><table><tr><th>תאריך</th><th>לקוח</th><th>סכום</th><th>אופן</th><th>הערות</th><th></th></tr>
+  <div class="twrap"><table><tr><th>תאריך</th><th>לקוח</th><th>סכום</th><th>אופן</th><th>חשבונית</th><th>הערות</th><th></th></tr>
   ${DB.payments.map(x=>`<tr><td>${fmtD(x.date)}</td><td>${esc(x.customer)}</td>
     <td class="money">${fmtM(x.amount)}</td><td>${esc(x.method||'')}</td>
-    <td style="white-space:normal;max-width:220px">${esc(x.notes||'')}</td>
+    <td>${x.invoiceUrl?`<a href="${esc(x.invoiceUrl)}" target="_blank" class="rowbtn" style="text-decoration:none">🧾 ${esc(x.invoiceNum||'צפה')}</a>`:`<button class="rowbtn" onclick="issueInvoice('${x.id}')" title="הפק חשבונית מס-קבלה ב-EZcount">🧾 הפק</button>`}</td>
+    <td style="white-space:normal;max-width:200px">${esc(x.notes||'')}</td>
     <td><button class="rowbtn" onclick="editPay('${x.id}')">✏️</button><button class="rowbtn" onclick="delPay('${x.id}')">🗑️</button></td></tr>`).join('')
-    || '<tr><td colspan="6" class="empty">עדיין לא נרשמו תשלומים</td></tr>'}
+    || '<tr><td colspan="7" class="empty">עדיין לא נרשמו תשלומים</td></tr>'}
   </table></div></div>`;
+}
+const EZ_PAYTYPE={'מזומן':1,'העברה בנקאית':4,"צ'ק":2,'אחר':1};
+async function issueInvoice(id){
+  const x=DB.payments.find(p=>String(p.id)===String(id)); if(!x) return;
+  if(x.invoiceUrl){ window.open(x.invoiceUrl,'_blank'); return; }
+  if(!await uiConfirm(`להפיק חשבונית מס-קבלה ב-EZcount עבור <b>${esc(x.customer)}</b> על סך <b>${fmtM(x.amount)}</b>?`,'🧾 הפק',false)) return;
+  setSync('save');
+  try{
+    const r=await apiPost({action:'ezDoc', type:320, customer_name:x.customer, amount:x.amount,
+      payment_type:EZ_PAYTYPE[x.method]||1, details:'תשלום עבור סחורה — '+x.customer});
+    if(!r.ok){ setSync('err'); toast('EZcount: '+(r.error||'שגיאה')); return; }
+    await saveRow(SHEET_PAY, {...x, date:"'"+String(x.date).slice(0,10), invoiceNum:r.doc_number||'', invoiceUrl:r.doc_url||''});
+    toast('החשבונית הופקה ✔'+(r.demo?' (דמו)':'')); await loadAll(); nav('pay');
+  }catch(e){ setSync('err'); toast('שגיאה בהפקת החשבונית'); }
 }
 async function submitPayment(){
   const date=$('#p-date').value, customer=$('#p-cust').value.trim(), amount=$('#p-amount').value;
