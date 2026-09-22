@@ -1,1 +1,6 @@
 seed_import.py
+seed_data.json
+data.json
+data.json.tmp
+ez.env
+backups/
