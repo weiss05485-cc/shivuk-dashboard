@@ -840,29 +840,52 @@ function viewPay(){
     <td class="money neg" style="font-size:15px">${fmtM(balances.reduce((a,b)=>a+b.bal,0))}</td></tr>
   </table></div></div>
 
+  ${(()=>{ const noInv=DB.payments.filter(x=>!isInvoiced(x)).length;
+    return noInv?`<div class="card" style="border-color:var(--gold)"><b>🧾 ${noInv} תשלומים עדיין בלי חשבונית</b> — הפק להם חשבונית ב-EZcount, וסמן אותם כאן.</div>`:''; })()}
   <div class="card"><h2>📜 היסטוריית תשלומים (${DB.payments.length})</h2>
   <div class="twrap"><table><tr><th>תאריך</th><th>לקוח</th><th>סכום</th><th>אופן</th><th>חשבונית</th><th>הערות</th><th></th></tr>
   ${DB.payments.map(x=>`<tr><td>${fmtD(x.date)}</td><td>${esc(x.customer)}</td>
     <td class="money">${fmtM(x.amount)}</td><td>${esc(x.method||'')}</td>
-    <td>${x.invoiceUrl?`<a href="${esc(x.invoiceUrl)}" target="_blank" class="rowbtn" style="text-decoration:none">🧾 ${esc(x.invoiceNum||'צפה')}</a>`:`<button class="rowbtn" onclick="issueInvoice('${x.id}')" title="הפק חשבונית מס-קבלה ב-EZcount">🧾 הפק</button>`}</td>
+    <td>${isInvoiced(x)
+      ? `<button class="rowbtn" style="background:#e2efda;color:var(--green)" onclick="markInvoice('${x.id}')" title="יצאה חשבונית — לחץ לעריכה/ביטול">✓ חשבונית${x.invoiceNum?' '+esc(x.invoiceNum):''}</button>`
+      : `<button class="rowbtn" onclick="markInvoice('${x.id}')" title="סמן שיצאה חשבונית ב-EZcount">🧾 סמן</button>`}</td>
     <td style="white-space:normal;max-width:200px">${esc(x.notes||'')}</td>
     <td><button class="rowbtn" onclick="editPay('${x.id}')">✏️</button><button class="rowbtn" onclick="delPay('${x.id}')">🗑️</button></td></tr>`).join('')
     || '<tr><td colspan="7" class="empty">עדיין לא נרשמו תשלומים</td></tr>'}
   </table></div></div>`;
 }
-const EZ_PAYTYPE={'מזומן':1,'העברה בנקאית':4,"צ'ק":2,'אחר':1};
-async function issueInvoice(id){
+function isInvoiced(x){ return x.invoiced==='1' || x.invoiced===1 || x.invoiced===true; }
+function markInvoice(id){
   const x=DB.payments.find(p=>String(p.id)===String(id)); if(!x) return;
-  if(x.invoiceUrl){ window.open(x.invoiceUrl,'_blank'); return; }
-  if(!await uiConfirm(`להפיק חשבונית מס-קבלה ב-EZcount עבור <b>${esc(x.customer)}</b> על סך <b>${fmtM(x.amount)}</b>?`,'🧾 הפק',false)) return;
-  setSync('save');
-  try{
-    const r=await apiPost({action:'ezDoc', type:320, customer_name:x.customer, amount:x.amount,
-      payment_type:EZ_PAYTYPE[x.method]||1, details:'תשלום עבור סחורה — '+x.customer});
-    if(!r.ok){ setSync('err'); toast('EZcount: '+(r.error||'שגיאה')); return; }
-    await saveRow(SHEET_PAY, {...x, date:"'"+String(x.date).slice(0,10), invoiceNum:r.doc_number||'', invoiceUrl:r.doc_url||''});
-    toast('החשבונית הופקה ✔'+(r.demo?' (דמו)':'')); await loadAll(); nav('pay');
-  }catch(e){ setSync('err'); toast('שגיאה בהפקת החשבונית'); }
+  const on=isInvoiced(x);
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML=`<div style="background:#fff;border-radius:16px;padding:22px;width:min(360px,95vw);box-shadow:0 18px 50px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:700;color:var(--blue);margin-bottom:6px">🧾 סימון חשבונית</div>
+    <div style="font-size:14px;margin-bottom:12px">${esc(x.customer)} · ${fmtM(x.amount)} · ${fmtD(x.date)}</div>
+    <label>מספר חשבונית (לא חובה)</label>
+    <input id="mi-num" value="${esc(x.invoiceNum||'')}" placeholder="לדוגמה 320-1024">
+    <div style="text-align:center;margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+      <button class="btn" data-ok="1">✓ יצאה חשבונית</button>
+      ${on?`<button class="btn danger" data-off="1">בטל סימון</button>`:''}
+      <button class="btn sec" data-cancel="1">ביטול</button>
+    </div></div>`;
+  document.body.appendChild(ov);
+  const close=()=>ov.remove();
+  ov.onclick=e=>{ if(e.target===ov) close(); };
+  ov.querySelector('[data-cancel]').onclick=close;
+  ov.querySelector('[data-ok]').onclick=async()=>{
+    const num=ov.querySelector('#mi-num').value.trim(); close();
+    try{ await saveRow(SHEET_PAY,{...x, date:"'"+String(x.date).slice(0,10), invoiced:'1', invoiceNum:num, invoiceDate:"'"+new Date().toISOString().slice(0,10)});
+      toast('סומן שיצאה חשבונית ✔'); await loadAll(); nav('pay'); }
+    catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
+  };
+  if(on) ov.querySelector('[data-off]').onclick=async()=>{
+    close();
+    try{ await saveRow(SHEET_PAY,{...x, date:"'"+String(x.date).slice(0,10), invoiced:'', invoiceNum:''});
+      toast('הסימון בוטל'); await loadAll(); nav('pay'); }
+    catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
+  };
 }
 async function submitPayment(){
   const date=$('#p-date').value, customer=$('#p-cust').value.trim(), amount=$('#p-amount').value;
