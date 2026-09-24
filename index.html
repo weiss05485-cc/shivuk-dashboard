@@ -123,7 +123,12 @@ const APP_PW_HASH = '7336d9ead196fe8ac03a3c003144eea8d119040dca54285735074793d40
 const GS_ENC = 'aa4f5102ed5d188f654ad451299eee9ad37cd126da29d44598a65cc313f5ec8b7dfc0c292b';
 const GS_VER = '3';  // מעלים כשמשנים כתובת שרת — מאלץ כניסה מחדש שתרענן את הכתובת בכל מכשיר
 let GS_URL = '';                              // כתובת ה-Apps Script — מוגדרת במסך הגדרות
-const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים', SHEET_EXP = 'הוצאות', SHEET_SUP = 'ספק_GB', SHEET_SUP_T = 'ספק_טירול';
+const SHEET_SHIP = 'משלוחים', SHEET_PRICE = 'מחירון', SHEET_PAY = 'תשלומים', SHEET_EXP = 'הוצאות', SHEET_SUP = 'ספק_GB', SHEET_SUP_T = 'ספק_טירול', SHEET_CUST = 'לקוחות';
+const INV_STATES = {
+  '':        { t:'⚪ לא הוצאה חשבונית', bg:'#eeeeee', fg:'#666' },
+  'invoice': { t:'🟠 חשבונית מס (חייב)', bg:'#fde7cf', fg:'#b8600b' },
+  'receipt': { t:'🟢 שולם (עם קבלה)',    bg:'#e2efda', fg:'#1e7e34' }
+};
 const PAY_METHODS = ['מזומן','העברה בנקאית',"צ'ק",'אחר'];
 const EXP_CATS = ['משלוח','אריזה','נסיעות','עמלות','אחר'];
 // מידות ברכסוני — כמו באקסלים (רגיל 12-20 + מידות צוואר 14.5-20), עמודות 32-33 / 34-35
@@ -142,7 +147,7 @@ const CUSTOMERS_DEFAULT = [];   // הלקוחות נטענים מהנתונים 
 const TYPES = ['ברכסוני','העברת GB','טירול','חזרה','אחר'];
 
 /* ================= STATE ================= */
-const DB = { shipments:[], prices:[], payments:[], expenses:[], supplierPays:[], supplierPaysT:[] };
+const DB = { shipments:[], prices:[], payments:[], expenses:[], supplierPays:[], supplierPaysT:[], customersData:[] };
 let page = 'home', editId = null, editPayId = null, editPriceId = null, custFilter = '', typeFilter = '';
 let _gbItems = null; // שורות המוצרים מהמחשבון (נשמרות על המשלוח לחישוב רווח לפי מוצר)
 let _brxSizes = null; // פירוט מידות ברכסוני של המשלוח הנוכחי
@@ -175,6 +180,7 @@ function fmtD(d){ d=String(stripApos(d)).slice(0,10); const p=d.split('-'); retu
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); DB.payments.forEach(p=>p.customer&&set.add(p.customer)); return [...set]; }
 function paidOf(c){ return DB.payments.filter(p=>!c||p.customer===c).reduce((a,p)=>a+(+p.amount||0),0); }
+function custInfo(name){ return DB.customersData.find(c=>String(c.id)===String(name)) || {id:name, invoiceName:'', invStatus:'', invNum:''}; }
 // ספק GB: סחורת GB בלבד (העברות GB + חזרות)
 function isGbGoods(s){ return s.type==='העברת GB' || s.type==='חזרה'; }
 function goodsCost(){ return DB.shipments.reduce((a,s)=>{ if(!isGbGoods(s)) return a; const c=shipCost(s); return a+(c!=null?c:0); },0); }
@@ -221,13 +227,14 @@ async function loadAll(){
   if(!gsUrl()){ setSync('nocfg'); if(page==='home') nav('settings'); return; }
   setSync('load');
   try{
-    const [ships, prices, pays, exps, sups, supsT] = await Promise.all([
+    const [ships, prices, pays, exps, sups, supsT, custs] = await Promise.all([
       apiGet({action:'getTable', sheet:SHEET_SHIP}),
       apiGet({action:'getTable', sheet:SHEET_PRICE}),
       apiGet({action:'getTable', sheet:SHEET_PAY}),
       apiGet({action:'getTable', sheet:SHEET_EXP}),
       apiGet({action:'getTable', sheet:SHEET_SUP}),
       apiGet({action:'getTable', sheet:SHEET_SUP_T}),
+      apiGet({action:'getTable', sheet:SHEET_CUST}),
     ]);
     DB.shipments = (ships.rows||[]).map(r=>({ ...r, date:stripApos(r.date), units:+r.units||0,
       amount:(r.amount===''||r.amount==null)?'':+r.amount,
@@ -241,6 +248,7 @@ async function loadAll(){
     DB.supplierPays = (sups.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
     DB.supplierPaysT = (supsT.rows||[]).map(r=>({ ...r, date:stripApos(r.date), amount:+r.amount||0 }));
     DB.supplierPaysT.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
+    DB.customersData = (custs.rows||[]);
     DB.shipments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     DB.payments.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
     DB.expenses.sort((a,b)=> String(b.date).localeCompare(String(a.date)));
@@ -829,61 +837,63 @@ function viewPay(){
   ${p?`<button class="btn sec" style="margin-inline-start:8px" onclick="editPayId=null;render()">ביטול</button>`:''}
   </div>
 
-  <div class="card"><h2>💳 מצב חובות לפי לקוח</h2>
-  <div class="twrap"><table><tr><th>לקוח</th><th>סה"כ מכירות</th><th>שולם</th><th>חוב פתוח</th></tr>
-  ${balances.map(b=>`<tr><td><b>${esc(b.c)}</b></td><td class="money">${fmtM(b.sales)}</td>
+  <div class="card"><h2>💳 מצב חובות + חשבוניות לפי לקוח</h2>
+  <div class="twrap"><table><tr><th>לקוח</th><th>שם בחשבונית (EZcount)</th><th>סה"כ מכירות</th><th>שולם</th><th>חוב פתוח</th><th>סטטוס חשבונית</th></tr>
+  ${balances.map(b=>{ const ci=custInfo(b.c); const st=INV_STATES[ci.invStatus||'']||INV_STATES[''];
+    return `<tr><td><b>${esc(b.c)}</b></td>
+    <td>${ci.invoiceName?esc(ci.invoiceName):'<span class="note">—</span>'}</td>
+    <td class="money">${fmtM(b.sales)}</td>
     <td class="money">${fmtM(b.paid)}</td>
-    <td class="money ${b.bal>0?'neg':''}" style="font-size:15px">${fmtM(b.bal)}</td></tr>`).join('')}
-  <tr><td style="font-weight:900">סה"כ</td>
+    <td class="money ${b.bal>0?'neg':''}" style="font-size:15px">${fmtM(b.bal)}</td>
+    <td><button class="rowbtn" style="background:${st.bg};color:${st.fg}" onclick="editCustInvoice('${esc(b.c)}')" title="לחץ לעדכון שם בחשבונית / סטטוס">${st.t}${ci.invNum?' · '+esc(ci.invNum):''}</button></td></tr>`;}).join('')}
+  <tr><td style="font-weight:900">סה"כ</td><td></td>
     <td class="money">${fmtM(balances.reduce((a,b)=>a+b.sales,0))}</td>
     <td class="money">${fmtM(balances.reduce((a,b)=>a+b.paid,0))}</td>
-    <td class="money neg" style="font-size:15px">${fmtM(balances.reduce((a,b)=>a+b.bal,0))}</td></tr>
-  </table></div></div>
+    <td class="money neg" style="font-size:15px">${fmtM(balances.reduce((a,b)=>a+b.bal,0))}</td><td></td></tr>
+  </table></div>
+  <p class="note" style="margin-top:6px">🟠 חשבונית מס בלי קבלה = הופקה חשבונית אך עדיין לא שולם · 🟢 עם קבלה = שולם · ⚪ = לא הוצאה חשבונית. מסמנים ידנית אחרי הפקה ב-EZcount.</p></div>
 
-  ${(()=>{ const noInv=DB.payments.filter(x=>!isInvoiced(x)).length;
-    return noInv?`<div class="card" style="border-color:var(--gold)"><b>🧾 ${noInv} תשלומים עדיין בלי חשבונית</b> — הפק להם חשבונית ב-EZcount, וסמן אותם כאן.</div>`:''; })()}
   <div class="card"><h2>📜 היסטוריית תשלומים (${DB.payments.length})</h2>
-  <div class="twrap"><table><tr><th>תאריך</th><th>לקוח</th><th>סכום</th><th>אופן</th><th>חשבונית</th><th>הערות</th><th></th></tr>
+  <div class="twrap"><table><tr><th>תאריך</th><th>לקוח</th><th>סכום</th><th>אופן</th><th>הערות</th><th></th></tr>
   ${DB.payments.map(x=>`<tr><td>${fmtD(x.date)}</td><td>${esc(x.customer)}</td>
     <td class="money">${fmtM(x.amount)}</td><td>${esc(x.method||'')}</td>
-    <td>${isInvoiced(x)
-      ? `<button class="rowbtn" style="background:#e2efda;color:var(--green)" onclick="markInvoice('${x.id}')" title="יצאה חשבונית — לחץ לעריכה/ביטול">✓ חשבונית${x.invoiceNum?' '+esc(x.invoiceNum):''}</button>`
-      : `<button class="rowbtn" onclick="markInvoice('${x.id}')" title="סמן שיצאה חשבונית ב-EZcount">🧾 סמן</button>`}</td>
-    <td style="white-space:normal;max-width:200px">${esc(x.notes||'')}</td>
+    <td style="white-space:normal;max-width:220px">${esc(x.notes||'')}</td>
     <td><button class="rowbtn" onclick="editPay('${x.id}')">✏️</button><button class="rowbtn" onclick="delPay('${x.id}')">🗑️</button></td></tr>`).join('')
-    || '<tr><td colspan="7" class="empty">עדיין לא נרשמו תשלומים</td></tr>'}
+    || '<tr><td colspan="6" class="empty">עדיין לא נרשמו תשלומים</td></tr>'}
   </table></div></div>`;
 }
-function isInvoiced(x){ return x.invoiced==='1' || x.invoiced===1 || x.invoiced===true; }
-function markInvoice(id){
-  const x=DB.payments.find(p=>String(p.id)===String(id)); if(!x) return;
-  const on=isInvoiced(x);
+function editCustInvoice(name){
+  const ci=custInfo(name), cur=ci.invStatus||'';
   const ov=document.createElement('div');
   ov.style.cssText='position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:16px';
-  ov.innerHTML=`<div style="background:#fff;border-radius:16px;padding:22px;width:min(360px,95vw);box-shadow:0 18px 50px rgba(0,0,0,.3)">
-    <div style="font-size:16px;font-weight:700;color:var(--blue);margin-bottom:6px">🧾 סימון חשבונית</div>
-    <div style="font-size:14px;margin-bottom:12px">${esc(x.customer)} · ${fmtM(x.amount)} · ${fmtD(x.date)}</div>
-    <label>מספר חשבונית (לא חובה)</label>
-    <input id="mi-num" value="${esc(x.invoiceNum||'')}" placeholder="לדוגמה 320-1024">
-    <div style="text-align:center;margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-      <button class="btn" data-ok="1">✓ יצאה חשבונית</button>
-      ${on?`<button class="btn danger" data-off="1">בטל סימון</button>`:''}
+  const stBtn=(v)=>`<button data-st="${v}" class="btn ${v===cur?'':'sec'}" style="${v===cur?('background:'+INV_STATES[v].bg+';color:'+INV_STATES[v].fg):''};width:100%;margin-bottom:6px">${INV_STATES[v].t}</button>`;
+  ov.innerHTML=`<div style="background:#fff;border-radius:16px;padding:22px;width:min(400px,95vw);box-shadow:0 18px 50px rgba(0,0,0,.3)">
+    <div style="font-size:16px;font-weight:700;color:var(--blue);margin-bottom:12px">🧾 ${esc(name)}</div>
+    <label>שם בחשבונית (כמו ב-EZcount)</label>
+    <input id="ci-name" value="${esc(ci.invoiceName||'')}" placeholder="${esc(name)}">
+    <label style="margin-top:10px">מספר חשבונית (לא חובה)</label>
+    <input id="ci-num" value="${esc(ci.invNum||'')}" placeholder="לדוגמה 320-1024">
+    <label style="margin-top:12px">סטטוס החשבונית</label>
+    ${stBtn('')}${stBtn('invoice')}${stBtn('receipt')}
+    <div style="text-align:center;margin-top:14px;display:flex;gap:8px;justify-content:center">
+      <button class="btn" data-save="1">💾 שמור</button>
       <button class="btn sec" data-cancel="1">ביטול</button>
     </div></div>`;
   document.body.appendChild(ov);
+  let sel=cur;
   const close=()=>ov.remove();
   ov.onclick=e=>{ if(e.target===ov) close(); };
   ov.querySelector('[data-cancel]').onclick=close;
-  ov.querySelector('[data-ok]').onclick=async()=>{
-    const num=ov.querySelector('#mi-num').value.trim(); close();
-    try{ await saveRow(SHEET_PAY,{...x, date:"'"+String(x.date).slice(0,10), invoiced:'1', invoiceNum:num, invoiceDate:"'"+new Date().toISOString().slice(0,10)});
-      toast('סומן שיצאה חשבונית ✔'); await loadAll(); nav('pay'); }
-    catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
-  };
-  if(on) ov.querySelector('[data-off]').onclick=async()=>{
+  ov.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>{
+    sel=b.getAttribute('data-st');
+    ov.querySelectorAll('[data-st]').forEach(x=>{ x.className='btn sec'; x.style.cssText='width:100%;margin-bottom:6px'; });
+    b.className='btn'; b.style.cssText=`width:100%;margin-bottom:6px;background:${INV_STATES[sel].bg};color:${INV_STATES[sel].fg}`;
+  });
+  ov.querySelector('[data-save]').onclick=async()=>{
+    const rec={ id:name, name, invoiceName:ov.querySelector('#ci-name').value.trim(),
+      invNum:ov.querySelector('#ci-num').value.trim(), invStatus:sel };
     close();
-    try{ await saveRow(SHEET_PAY,{...x, date:"'"+String(x.date).slice(0,10), invoiced:'', invoiceNum:''});
-      toast('הסימון בוטל'); await loadAll(); nav('pay'); }
+    try{ await saveRow(SHEET_CUST, rec); toast('נשמר ✔'); await loadAll(); nav('pay'); }
     catch(e){ setSync('err'); toast('שגיאה בשמירה'); }
   };
 }
