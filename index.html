@@ -841,7 +841,7 @@ function viewPay(){
   <div class="twrap"><table><tr><th>לקוח</th><th>שם בחשבונית (EZcount)</th><th>סה"כ מכירות</th><th>שולם</th><th>חוב פתוח</th><th>סטטוס חשבונית</th></tr>
   ${balances.map(b=>{ const ci=custInfo(b.c); const st=INV_STATES[ci.invStatus||'']||INV_STATES[''];
     return `<tr><td><b>${esc(b.c)}</b></td>
-    <td>${ci.invoiceName?esc(ci.invoiceName):'<span class="note">—</span>'}</td>
+    <td><button class="rowbtn" onclick="editCustInvoice('${esc(b.c)}')" title="לחץ להזין/לעדכן את שם הלקוח כמו ב-EZcount">${ci.invoiceName?esc(ci.invoiceName):'✏️ הוסף שם'}</button></td>
     <td class="money">${fmtM(b.sales)}</td>
     <td class="money">${fmtM(b.paid)}</td>
     <td class="money ${b.bal>0?'neg':''}" style="font-size:15px">${fmtM(b.bal)}</td>
