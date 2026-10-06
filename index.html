@@ -178,6 +178,8 @@ function fmtN(n){ if(n===''||n==null||isNaN(n)) return '—'; return (+n).toLoca
 function stripApos(v){ return (typeof v==='string' && v.startsWith("'")) ? v.slice(1) : v; }
 function fmtD(d){ d=String(stripApos(d)).slice(0,10); const p=d.split('-'); return p.length===3?`${p[2]}/${p[1]}/${p[0].slice(2)}`:d; }
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// בטוח להעברה כארגומנט מחרוזת בתוך onclick="fn('...')": קודם JS-escape, אחר כך esc מטפל ב-HTML
+function jsarg(s){ return esc(String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,'\\n')); }
 function customers(){ const set=new Set(CUSTOMERS_DEFAULT); DB.shipments.forEach(s=>s.customer&&set.add(s.customer)); DB.payments.forEach(p=>p.customer&&set.add(p.customer)); return [...set]; }
 function paidOf(c){ return DB.payments.filter(p=>!c||p.customer===c).reduce((a,p)=>a+(+p.amount||0),0); }
 function custInfo(name){ return DB.customersData.find(c=>String(c.id)===String(name)) || {id:name, invoiceName:'', invStatus:'', invNum:''}; }
@@ -656,7 +658,7 @@ function viewList(){
   return `<div class="card"><h2>📋 כל המשלוחים (${rows.length})</h2>
   <div class="filters">
     <button class="chip ${!custFilter?'on':''}" onclick="custFilter='';render()">כל הלקוחות</button>
-    ${customers().map(c=>`<button class="chip ${custFilter===c?'on':''}" onclick="custFilter='${esc(c)}';render()">${esc(c)}</button>`).join('')}
+    ${customers().map(c=>`<button class="chip ${custFilter===c?'on':''}" onclick="custFilter='${jsarg(c)}';render()">${esc(c)}</button>`).join('')}
   </div>
   <div class="filters">
     <button class="chip ${!typeFilter?'on':''}" onclick="typeFilter='';render()">כל הסוגים</button>
@@ -841,11 +843,11 @@ function viewPay(){
   <div class="twrap"><table><tr><th>לקוח</th><th>שם בחשבונית (EZcount)</th><th>סה"כ מכירות</th><th>שולם</th><th>חוב פתוח</th><th>סטטוס חשבונית</th></tr>
   ${balances.map(b=>{ const ci=custInfo(b.c); const st=INV_STATES[ci.invStatus||'']||INV_STATES[''];
     return `<tr><td><b>${esc(b.c)}</b></td>
-    <td><button class="rowbtn" onclick="editCustInvoice('${esc(b.c)}')" title="לחץ להזין/לעדכן את שם הלקוח כמו ב-EZcount">${ci.invoiceName?esc(ci.invoiceName):'✏️ הוסף שם'}</button></td>
+    <td><button class="rowbtn" onclick="editCustInvoice('${jsarg(b.c)}')" title="לחץ להזין/לעדכן את שם הלקוח כמו ב-EZcount">${ci.invoiceName?esc(ci.invoiceName):'✏️ הוסף שם'}</button></td>
     <td class="money">${fmtM(b.sales)}</td>
     <td class="money">${fmtM(b.paid)}</td>
     <td class="money ${b.bal>0?'neg':''}" style="font-size:15px">${fmtM(b.bal)}</td>
-    <td><button class="rowbtn" style="background:${st.bg};color:${st.fg}" onclick="editCustInvoice('${esc(b.c)}')" title="לחץ לעדכון שם בחשבונית / סטטוס">${st.t}${ci.invNum?' · '+esc(ci.invNum):''}</button></td></tr>`;}).join('')}
+    <td><button class="rowbtn" style="background:${st.bg};color:${st.fg}" onclick="editCustInvoice('${jsarg(b.c)}')" title="לחץ לעדכון שם בחשבונית / סטטוס">${st.t}${ci.invNum?' · '+esc(ci.invNum):''}</button></td></tr>`;}).join('')}
   <tr><td style="font-weight:900">סה"כ</td><td></td>
     <td class="money">${fmtM(balances.reduce((a,b)=>a+b.sales,0))}</td>
     <td class="money">${fmtM(balances.reduce((a,b)=>a+b.paid,0))}</td>
